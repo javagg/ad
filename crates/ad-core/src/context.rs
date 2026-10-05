@@ -118,6 +118,43 @@ impl<S: Scalar> Context<S> {
         }
     }
 
+    /// 按全局 L2 范数裁剪给定叶子集合的梯度（原位）：g ← g·min(1, max_norm/‖g‖)。
+    /// 返回裁剪前的范数。范数非有限时不做任何缩放（交给异常检测定位）。
+    pub fn clip_grad_norm(&mut self, vars: &[Variable], max_norm: S) -> S {
+        let mut sq = S::zero();
+        for &v in vars {
+            if let Some(g) = self.grad(v) {
+                sq = sq + g * g;
+            }
+        }
+        let norm = sq.sqrt();
+        if norm.is_finite() && norm > max_norm {
+            let scale = max_norm / norm;
+            for &v in vars {
+                if let Some(&i) = self.leaf_index.get(&v.node) {
+                    self.leaf_gradients[i] = self.leaf_gradients[i] * scale;
+                }
+            }
+        }
+        norm
+    }
+
+    /// 逐元素裁剪给定叶子集合的梯度到 [-value, value]。
+    pub fn clip_grad_value(&mut self, vars: &[Variable], value: S) {
+        for &v in vars {
+            if let Some(&i) = self.leaf_index.get(&v.node) {
+                let g = self.leaf_gradients[i];
+                self.leaf_gradients[i] = if g > value {
+                    value
+                } else if g < -value {
+                    -value
+                } else {
+                    g
+                };
+            }
+        }
+    }
+
     /// 清空 tape 与中间伴随（保留叶子注册和梯度），供下一轮前向复用。
     /// 此前 tape 产生的中间 `AD` 值失效。
     pub fn clear_tape(&mut self) {

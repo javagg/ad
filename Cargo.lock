@@ -12,6 +12,7 @@ dependencies = [
  "ad-ops",
  "ad-verify",
  "criterion",
+ "smallvec",
 ]
 
 [[package]]

@@ -13,6 +13,7 @@ ad-checkpoint = { workspace = true }
 ad-verify = { workspace = true }
 
 [dev-dependencies]
+smallvec = { workspace = true }
 criterion = "0.5"
 
 [[bench]]

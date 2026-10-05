@@ -462,6 +462,12 @@ pub fn call_custom<S: Scalar>(ctx: &mut Context<S>, op: &dyn CustomOp<S>, inputs
 
 注意：`forward` 的输入是**已剥离节点信息的纯数值切片**（`&[S]`）。自定义算子内部（如 ABA 的递归）用普通 `f64` 计算，**不会再入带**——这正是"计算图不爆炸"的机制本身；需要内部梯度的场景嵌套一层 `call_custom` 或用 IFT 模式（§4.3.3）。
 
+**⚠️ backward 契约（实现期发现，§12.3 第 13 条）**：tape 只看见算子级的输入→输出边，
+**算子内部的数据流（包括输出之间的耦合边）对 tape 不可见，backward 必须完整覆盖**。
+典型陷阱：`x' = x + dt·v'` 且 `v'` 是同一算子的另一个输出——此时作用于 `a(x)` 路径的
+伴随是 `λv' + dt·λx'`（而非裸的 `λv'`）。此类错误在单步上很小、随轨迹长度**复合放大**，
+primitive 级单步逐坐标 FD 测试可可靠隔离（`scenarios::chain_one_step_per_coordinate_fd`）。
+
 #### 4.3.2 物理算子示例：ABA 的一步
 
 ```rust
@@ -1122,6 +1128,18 @@ M1–M4 核心能力已实现并通过测试（约 60 个测试，`cargo test --
 12. **长循环性能注意**：优化循环必须在每轮调用 `clear_tape()`，否则 tape 无限增长、
     每次 backward 全量遍历退化为 O(n²)（基准示例中实测 10 μs/iter → 119 ns/iter）。
     `tape_len()` 探针（§5.5）即为尽早暴露此类误用而设。
+13. **CustomOp backward 的内部边陷阱（§4.3.1 已补契约）**：tape 只看见算子级输入→输出边，
+    backward 必须覆盖算子内部全部数据流——包括**输出之间的耦合边**（如 `x' = x + dt·v'`
+    中 v' 是本算子的另一个输出：作用于 a(x) 路径的伴随是 `λv' + dt·λx'`）。该错误单步
+    极小、随轨迹复合放大，曾被弹跳球场景测试（400 步）与多体链单步逐坐标 FD 测试共同
+    抓出；PendulumStep 未踩中是因为其输出只依赖**输入**（θ' = θ + dt·ω）。接入规范要求：
+    新算子先过"单步逐坐标 FD"再上长轨迹。
+14. **梯度裁剪已实现**（§4.2.3）：`Context::clip_grad_norm`（返回裁剪前范数；非有限范数
+    不缩放，交给异常检测）/ `clip_grad_value`。
+15. **§5.3 物理场景清单补全**：自由落体（解析解 1e-12）、弹跳球（smooth-relu 接触力 +
+    手工 backward vs 前向 FD）、12 体半隐式弹簧链（26 维梯度，随机方向 FD + 健康度）
+    已入库（`crates/ad/tests/scenarios.rs`）；单步逐坐标 FD 作为 CustomOp 接入的标准
+    隔离器一并提供。
 
 ### 12.4 里程碑完成情况
 
@@ -1131,7 +1149,7 @@ M1–M4 核心能力已实现并通过测试（约 60 个测试，`cargo test --
 | M2 自定义算子 + 物理适配 | ✅ | 多输出扇出累加、多种子 VJP；PendulumStep 手工 backward vs AD 展开（1e-10）；IFT vs 闭式解 AD（1e-10）+ 非线性 Newton 收敛 |
 | M3 检查点 | ✅ | 分段 vs 全 tape 4 种调度一致（1e-10）；重跑 bit-exact；快照预算受控（Uniform=28、Online=5）；初始状态伴随可读 |
 | M4 梯度健康度 | ✅ | 有限差分抓错（10% 偏差）；随机方向（n=50, 8 方向）；轨迹 vanishing/exploding/oscillating/nonfinite 判定；∇Fuzz 式 kink 检测 |
-| M5 性能固化 | ✅（收尾项见下） | criterion 基准体系（`cargo bench -p ad`）：标量表达式 fresh 959 ns / 复用+clear_tape 476 ns；1000 步单摆分段反向 991 µs（≈1.6× 全 tape，满足 §5.4 ≤2.5×）。全局分配器计数的无泄漏长稳测试（复用 Context 50k 轮 / 每轮丢弃 Context 20k 轮，存活字节回到基线）。火焰图与 CI 集成待工程化 |
+| M5 性能固化 | ✅ | criterion 基准体系（`cargo bench -p ad`）：标量表达式 fresh ~1.0 µs / 复用+clear_tape ~0.4 µs；1000 步单摆分段反向 ~1.0 ms（≈1.6× 全 tape，满足 §5.4 ≤2.5×）。全局分配器计数的无泄漏长稳测试（复用 Context 50k 轮 / 每轮丢弃 Context 20k 轮，存活字节回到基线）。CI 工作流（fmt/clippy/test/wasm/演示构建/bench 冒烟）已入库。火焰图待做 |
 
 ### 12.5 wasm 与 web 演示（v0.1 附加交付）
 
@@ -1140,5 +1158,6 @@ M1–M4 核心能力已实现并通过测试（约 60 个测试，`cargo test --
 `crates/ad-demo`（Yew 0.21 + trunk）提供交互式演示：标量求导、1000 步单摆 checkpoint
 分段反向（SVG 轨迹）、IFT 隐式求解三个面板，均带**实时有限差分验证徽章**，计算在
 浏览器主线程同步完成（合计 < 5 ms）。`cd crates/ad-demo && trunk serve` 启动。
+浏览器实测：渲染、滑块交互→wasm 重算→实时更新、三面板 FD 徽章全绿。
 
-**文档状态**：v0.3.2——M1–M5 已实现（criterion 基准 + 无泄漏长稳测试 + wasm/Yew web 演示），待评审
+**文档状态**：v0.3.3——M1–M5 完成 + §5.3 场景清单补全 + CI；记录 CustomOp 内部边陷阱（§12.3 第 13 条）
