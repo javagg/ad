@@ -39,6 +39,7 @@ v0.1：M1–M5 里程碑的核心能力已实现并有测试覆盖（详见设�
 | §5.3 物理场景清单：自由落体（解析解）、弹跳接触、12 体弹簧链（26 维） | ✅ |
 | 空间代数算子库（`ad-physics`：6 个 CustomOp + 动能不变性先验测试） | ✅ |
 | 平滑接触模型（Hunt–Crossley 法向 + 正则化库仑摩擦 + 刚度扫描健康度） | ✅ |
+| 端到端轨迹优化基准（`ad-optim`：摆杆控制序列 150 维 + 接触弹跳球目标优化，梯度下降 + Armijo 收敛） | ✅ |
 | criterion 基准 + 全局分配器无泄漏长稳测试 | ✅ |
 | wasm32 编译 + Yew 交互式 web demo | ✅ |
 | CI（fmt / clippy / test / wasm / 演示构建 / bench 冒烟） | ✅ |
@@ -53,7 +54,8 @@ v0.1：M1–M5 里程碑的核心能力已实现并有测试覆盖（详见设�
 | [`ad-custom`](crates/ad-custom) | IFT 隐式求解模式、小型稠密线性求解 |
 | [`ad-checkpoint`](crates/ad-checkpoint) | `Recomputable` 状态机、快照调度、分段反向 + 边界伴随；含 `PendulumSim` 参考实现 |
 | [`ad-verify`](crates/ad-verify) | 有限差分 / 随机方向验证、梯度健康度、轨迹稳定性、可微性检查 |
-| [`ad-physics`](crates/ad-physics) | 空间代数（Featherstone 风格）参考 CustomOp：Plücker 运动/力变换、空间惯性作用量与坐标系变换、SO(3) 指数映射、空间叉积，全部手写 VJP + 逐坐标 FD + 动能不变性验证 |
+| [`ad-physics`](crates/ad-physics) | 空间代数（Featherstone 风格）参考 CustomOp：Plücker 运动/力变换、空间惯性作用量与坐标系变换、SO(3) 指数映射、空间叉积，全部手写 VJP + 逐坐标 FD + 动能不变性验证；含平滑接触模型（Hunt–Crossley 法向 + 正则化库仑摩擦） |
+| [`ad-optim`](crates/ad-optim) | 零依赖梯度优化器（Armijo 回溯 GD）+ 端到端轨迹优化收敛基准（受控摆杆 / 接触弹跳球） |
 | [`ad`](crates/ad) | facade：`use ad::prelude::*`；含 criterion 基准（`cargo bench -p ad`） |
 | [`ad-demo`](crates/ad-demo) | Yew + trunk web 演示（wasm32），见上方"Web 演示" |
 

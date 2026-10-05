@@ -65,6 +65,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ad-optim"
+version = "0.1.0"
+dependencies = [
+ "ad",
+ "ad-verify",
+]
+
+[[package]]
 name = "ad-physics"
 version = "0.1.0"
 dependencies = [

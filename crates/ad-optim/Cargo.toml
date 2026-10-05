@@ -1,0 +1,15 @@
+[package]
+name = "ad-optim"
+description = "Minimal gradient-based optimizers (Armijo backtracking gradient descent) for end-to-end trajectory optimization benchmarks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 刻意零依赖：优化器是纯数值代码，AD 由使用方（测试/示例）接线
+
+[dev-dependencies]
+ad-verify = { workspace = true }
+ad = { workspace = true }
+
+[lints]
+workspace = true
