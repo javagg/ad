@@ -6,6 +6,7 @@ members = [
     "crates/ad-custom",
     "crates/ad-checkpoint",
     "crates/ad-verify",
+    "crates/ad-physics",
     "crates/ad",
     "crates/ad-demo",
 ]
@@ -18,6 +19,7 @@ rust-version = "1.73"
 
 [workspace.dependencies]
 ad-core = { path = "crates/ad-core" }
+ad-physics = { path = "crates/ad-physics" }
 ad = { path = "crates/ad" }
 ad-ops = { path = "crates/ad-ops" }
 ad-custom = { path = "crates/ad-custom" }

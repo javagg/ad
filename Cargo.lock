@@ -10,6 +10,7 @@ dependencies = [
  "ad-core",
  "ad-custom",
  "ad-ops",
+ "ad-physics",
  "ad-verify",
  "criterion",
  "smallvec",
@@ -59,6 +60,15 @@ version = "0.1.0"
 dependencies = [
  "ad-core",
  "num-complex",
+ "num-traits",
+ "smallvec",
+]
+
+[[package]]
+name = "ad-physics"
+version = "0.1.0"
+dependencies = [
+ "ad-core",
  "num-traits",
  "smallvec",
 ]
