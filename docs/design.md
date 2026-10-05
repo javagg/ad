@@ -1207,6 +1207,18 @@ M1–M4 核心能力已实现并通过测试（约 60 个测试，`cargo test --
     或 Gauss-Newton 近似）列为后续工作。
     实现注记：显式 ctx 代码中混用 TLS 算子（`ad::clamp`）会 panic（§2.4
     双路径约束的运行时表现）——基准改用 `clamp_with`。
+21. **iLQR 求解器已实现**（`ad-optim::ilqr`，上面"后续工作"落地）：
+    Tassa 正则化 iLQR——动力学 Jacobian 由 `Context::backward_seeds` 逐输出
+    单位种子取出（每步 nx 次微型反向），代价限定标准二次型（Hessian 解析，
+    无需二阶 AD），Q_uu 正则化自适应 + 前向 α 回溯按预期下降验收。
+    双积分器（线性-二次）收敛到正则跟踪问题的离散最优；**受控摆杆同一问题
+    iLQR 6 迭代 vs GD 55 迭代**（θ_T = 1.1985 vs 1.187），Jacobian 与 GD 的
+    VJP 逐列对拍一致。"二阶信息"的实现路径即 §4.5.4 双数 oracle 的对偶用法
+    ——前向逐列 Jacobian 或反向 VJP 皆可，无需 Hessian。
+22. **推送基础设施**：HTTPS + gh 凭据为可用路径（SSH 需把 `id_ed25519.pub`
+    注册到账号或解锁带密码的 `id_rsa`）；OAuth token 推送 `.github/workflows/`
+    下文件需 `workflow` scope——CI workflow 以 `.github/ci.yml.pending` 形式
+    暂存，scope 授权后移回。
 
 ### 12.4 里程碑完成情况
 

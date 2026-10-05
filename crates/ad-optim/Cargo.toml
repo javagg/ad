@@ -1,11 +1,13 @@
 [package]
 name = "ad-optim"
-description = "Minimal gradient-based optimizers (Armijo backtracking gradient descent) for end-to-end trajectory optimization benchmarks"
+description = "Optimizers for the ad library: Armijo gradient descent + Tassa-regularized iLQR with AD-computed dynamics Jacobians"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# 刻意零依赖：优化器是纯数值代码，AD 由使用方（测试/示例）接线
+
+[dependencies]
+ad-core = { workspace = true }
 
 [dev-dependencies]
 ad-verify = { workspace = true }

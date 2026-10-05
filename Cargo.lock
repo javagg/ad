@@ -69,6 +69,7 @@ name = "ad-optim"
 version = "0.1.0"
 dependencies = [
  "ad",
+ "ad-core",
  "ad-verify",
 ]
 

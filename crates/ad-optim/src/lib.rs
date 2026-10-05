@@ -1,12 +1,14 @@
-//! `ad-optim`：最小梯度优化器——端到端轨迹优化基准的工具端。
+//! `ad-optim`：`ad` 库的优化器集合。
 //!
-//! 刻意保持零依赖、零 AD 耦合：`minimize_gradient_descent` 只见
-//! `FnMut(&[f64], &mut [f64]) -> f64`（输入 → (损失, 梯度)）。AD 由使用方
-//! 接线（见 `ad-optim` 的基准测试）。
-//!
-//! 优化器：梯度下降 + **Armijo 回溯线搜索** + 自适应步长伸缩。
-//! 基准目的是检验"AD 梯度是否可用于优化"，而非追求 SOTA——一阶方法
-//! 对梯度误差最敏感，正是合适的探针。
+//! 两类求解器：
+//! - [`minimize_gradient_descent`]：Armijo 回溯梯度下降（一阶，零 AD 耦合——
+//!   只见 `FnMut(&[f64], &mut [f64]) -> f64`）；
+//! - [`solve_ilqr`]：Tassa 正则化 iLQR（`ilqr` 模块），动力学 Jacobian 由
+//!   `Context` 的 `backward_seeds` 逐列求出，代价限定标准二次型（Hessian
+//!   解析）。见模块文档。
+
+pub mod ilqr;
+pub use ilqr::{rollout, solve_ilqr, Dynamics, IlqrCfg, IlqrReport, QuadraticCost};
 
 /// 优化器配置。
 #[derive(Clone, Debug)]
