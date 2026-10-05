@@ -78,6 +78,7 @@ name = "ad-physics"
 version = "0.1.0"
 dependencies = [
  "ad-core",
+ "ad-optim",
  "ad-verify",
  "num-traits",
  "smallvec",

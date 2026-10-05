@@ -372,7 +372,9 @@ pub fn solve_ilqr<D: Dynamics>(
         }
         mu /= cfg.mu_mult;
         mu = mu.max(1e-9);
-        if (-expected).abs() < cfg.tol {
+        // 收敛判据：预期下降归零 **且** 正则已基本关闭——μ 大时 k 被压缩，
+        // expected 小并不代表到达最优
+        if (-expected).abs() < cfg.tol && mu <= 1e-6 {
             converged = true;
         }
     }

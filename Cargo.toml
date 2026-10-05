@@ -26,6 +26,7 @@ ad-ops = { path = "crates/ad-ops" }
 ad-custom = { path = "crates/ad-custom" }
 ad-checkpoint = { path = "crates/ad-checkpoint" }
 ad-verify = { path = "crates/ad-verify" }
+ad-optim = { path = "crates/ad-optim" }
 num-traits = "0.2"
 smallvec = "1"
 num-complex = "0.4"
