@@ -38,6 +38,7 @@ v0.1：M1–M5 里程碑的核心能力已实现并有测试覆盖（详见设�
 | 梯度裁剪（`clip_grad_norm` / `clip_grad_value`） | ✅ |
 | §5.3 物理场景清单：自由落体（解析解）、弹跳接触、12 体弹簧链（26 维） | ✅ |
 | 空间代数算子库（`ad-physics`：6 个 CustomOp + 动能不变性先验测试） | ✅ |
+| 平滑接触模型（Hunt–Crossley 法向 + 正则化库仑摩擦 + 刚度扫描健康度） | ✅ |
 | criterion 基准 + 全局分配器无泄漏长稳测试 | ✅ |
 | wasm32 编译 + Yew 交互式 web demo | ✅ |
 | CI（fmt / clippy / test / wasm / 演示构建 / bench 冒烟） | ✅ |
