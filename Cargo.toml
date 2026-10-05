@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ad-core",
+    "crates/ad-ops",
+    "crates/ad-custom",
+    "crates/ad-checkpoint",
+    "crates/ad-verify",
+    "crates/ad",
+    "crates/ad-demo",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.70"
+
+[workspace.dependencies]
+ad-core = { path = "crates/ad-core" }
+ad = { path = "crates/ad" }
+ad-ops = { path = "crates/ad-ops" }
+ad-custom = { path = "crates/ad-custom" }
+ad-checkpoint = { path = "crates/ad-checkpoint" }
+ad-verify = { path = "crates/ad-verify" }
+num-traits = "0.2"
+smallvec = "1"
+num-complex = "0.4"
+proptest = "1"
+
+[profile.release]
+debug = true
+
+[workspace.lints.clippy]
+# 矩阵/Jacobian 构建中"下标即语义"的循环：索引写法最清晰
+needless_range_loop = "allow"
+type_complexity = "allow"

@@ -1,0 +1,17 @@
+[package]
+name = "ad-ops"
+description = "Primitive operators (with local Jacobians) and bulk vector ops for ad-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ad-core = { workspace = true }
+num-traits = { workspace = true }
+smallvec = { workspace = true }
+
+[dev-dependencies]
+num-complex = { workspace = true }
+
+[lints]
+workspace = true

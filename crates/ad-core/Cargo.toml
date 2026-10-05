@@ -1,0 +1,24 @@
+[package]
+name = "ad-core"
+description = "Core abstractions for a tape-based reverse-mode AD library designed for physics simulation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["test-oracle"]
+# Forward-mode dual number used as a trusted gradient oracle in tests and for
+# building residual Jacobians in implicit-function-theorem style operators.
+# Not part of the public forward-mode API contract (design doc §4.5.4).
+test-oracle = []
+
+[dependencies]
+num-traits = { workspace = true }
+smallvec = { workspace = true }
+
+[dev-dependencies]
+ad-ops = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true

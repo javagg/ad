@@ -1,0 +1,15 @@
+[package]
+name = "ad-demo"
+description = "Interactive web demo of the ad library (Yew + trunk, wasm32)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ad = { workspace = true }
+yew = { version = "0.21", features = ["csr"] }
+web-sys = { version = "0.3", features = ["HtmlInputElement"] }
+num-traits = { workspace = true }
+
+[lints]
+workspace = true

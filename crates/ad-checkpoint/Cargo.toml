@@ -1,0 +1,16 @@
+[package]
+name = "ad-checkpoint"
+description = "Checkpointing for long simulation rollouts: snapshot scheduling, segmented reverse, boundary adjoint passing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ad-core = { workspace = true }
+smallvec = { workspace = true }
+
+[dev-dependencies]
+ad-ops = { workspace = true }
+
+[lints]
+workspace = true
