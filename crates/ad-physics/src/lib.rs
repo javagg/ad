@@ -8,10 +8,12 @@
 //! 惯性三元组 `([Ī], m, c)`、旋转行主序 3×3。
 
 pub mod contact;
+pub mod gyro;
 pub mod ops;
 pub mod spatial;
 
 pub use contact::{ContactNormalOp, RegularizedFrictionOp};
+pub use gyro::GyroscopicStep;
 pub use ops::{
     InertiaApply, PluckerForce, PluckerMotion, RotateInertia, So3Exp, SpatialCrossMotion,
 };

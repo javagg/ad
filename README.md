@@ -42,6 +42,7 @@ v0.1：M1–M5 里程碑的核心能力已实现并有测试覆盖（详见设�
 | 端到端轨迹优化基准（`ad-optim`：摆杆控制序列 150 维 + 接触弹跳球目标优化，梯度下降 + Armijo 收敛） | ✅ |
 | iLQR 求解器（Tassa 正则化，AD 逐列 Jacobian；摆杆 6 迭代 vs GD 55 迭代） | ✅ |
 | 双关节摆（Acrobot 构型）：能量守恒先验 + 混沌 iLQR 局部性实证 | ✅ |
+| 3D 陀螺力学（`GyroscopicStep`：Euler 顶方程手写 VJP + 动能/角动量守恒 + 网球拍定理） | ✅ |
 | criterion 基准 + 全局分配器无泄漏长稳测试 | ✅ |
 | wasm32 编译 + Yew 交互式 web demo | ✅ |
 | CI（fmt / clippy / test / wasm / 演示构建 / bench 冒烟） | ✅ |

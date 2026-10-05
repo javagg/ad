@@ -10,7 +10,7 @@
 //! 物理先验：**能量守恒**——被动摆（τ=0）半隐式欧拉 2000 步能量有界。
 
 use ad::prelude::*;
-use ad::{Context, Variable};
+use ad::Context;
 
 // ---- 物理参数（点质量双摆） ----
 const M1: f64 = 1.0;
@@ -232,7 +232,7 @@ fn chain_passthrough_grads_match_fd() {
             .map(|o| o.value * o.value)
             .sum()
     };
-    for (j, &v) in all.iter().enumerate() {
+    for (j, _) in all.iter().enumerate() {
         let mut pp = all.clone();
         pp[j] += h;
         let mut pm = all.clone();
