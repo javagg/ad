@@ -61,6 +61,8 @@ pub struct PendulumSim {
     g: AD<f64>,
     len: AD<f64>,
     dt: f64,
+    /// `step` 被调用的总次数（含 no_grad 重算）——监测嵌套反转的重算量
+    pub steps_executed: usize,
 }
 
 impl PendulumSim {
@@ -79,6 +81,7 @@ impl PendulumSim {
             g,
             len,
             dt,
+            steps_executed: 0,
         };
         sim.bind_state(ctx);
         sim
@@ -109,6 +112,7 @@ impl Recomputable for PendulumSim {
     }
 
     fn step(&mut self, ctx: &mut Context<f64>) {
+        self.steps_executed += 1;
         let inputs = [
             self.state_ad[0],
             self.state_ad[1],

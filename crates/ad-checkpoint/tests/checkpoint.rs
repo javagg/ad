@@ -136,3 +136,74 @@ fn no_checkpoint_falls_back_to_full_tape() {
     // 预算 0 / interval 0 → 单段全量重算（内存换正确性的退化路径）
     compare("none", CheckpointStrategy::Online { budget: 0 });
 }
+
+// ---- 嵌套反转（Nested 策略，设计文档 §4.4.2）----
+
+/// 嵌套反转运行。返回 (∂L/∂g, ∂L/∂L, ∂L/∂θ₀, ∂L/∂ω₀, 反向阶段重算步数)。
+fn run_nested(budget: usize) -> ([f64; 4], usize) {
+    let mut ctx = Context::<f64>::new();
+    let (g_ad, g_var) = ctx.var(G);
+    let (l_ad, l_var) = ctx.var(LEN);
+    let mut sim = PendulumSim::new(&mut ctx, THETA0, OMEGA0, g_ad, l_ad, DT);
+    let mut ckpt = CheckpointManager::new(CheckpointStrategy::Nested { budget }, &sim);
+
+    for t in 0..T {
+        ckpt.forward_step(&mut ctx, &mut sim, t);
+    }
+    assert_eq!(ckpt.num_snapshots(), 0, "Nested 前向不存快照");
+    let before = sim.steps_executed;
+    let init_adj = ckpt.backward(&mut ctx, &mut sim, &loss_of);
+    let recompute = sim.steps_executed - before;
+
+    let grads = [
+        ctx.grad(g_var).unwrap(),
+        ctx.grad(l_var).unwrap(),
+        init_adj[0],
+        init_adj[1],
+    ];
+    (grads, recompute)
+}
+
+#[test]
+fn nested_matches_full_tape() {
+    let reference = reference_grads();
+    for budget in [1usize, 2, 3, 6] {
+        let (grads, _) = run_nested(budget);
+        for (i, (r, c)) in reference.iter().zip(grads.iter()).enumerate() {
+            let scale = 1.0 + r.abs() + c.abs();
+            assert!(
+                (r - c).abs() <= 1e-10 * scale,
+                "nested budget={budget}: grad[{i}] reference {r} vs got {c}"
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_recompute_within_bound() {
+    // 重算上界：T(n, m) = ⌈n/2⌉ + T(⌊n/2⌋, m-1) + T(⌈n/2⌉, m-1)，T(n, 0) = n
+    // → T(200, 2) = 400，T(200, 3) = 500，T(200, 6) ≈ 800
+    for (budget, bound) in [(2usize, 400), (3, 500), (6, 812)] {
+        let (_, recompute) = run_nested(budget);
+        assert!(
+            recompute <= bound,
+            "budget={budget}: recompute {recompute} > bound {bound}"
+        );
+        assert!(recompute >= T, "budget={budget}: recompute {recompute} < T");
+    }
+}
+
+#[test]
+fn nested_budget_zero_degenerates_to_full_tape() {
+    let reference = reference_grads();
+    let (grads, recompute) = run_nested(0);
+    for (i, (r, c)) in reference.iter().zip(grads.iter()).enumerate() {
+        let scale = 1.0 + r.abs() + c.abs();
+        assert!(
+            (r - c).abs() <= 1e-10 * scale,
+            "grad[{i}] reference {r} vs got {c}"
+        );
+    }
+    // budget=0 → 单窗口全量：重算恰好 = T
+    assert_eq!(recompute, T);
+}

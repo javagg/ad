@@ -97,6 +97,7 @@ impl<R: Recomputable> CheckpointManager<R> {
     /// 并返回；`ctx.zero_grads()` 会在开始时自动执行（fresh 语义）。
     ///
     /// 返回初始状态（step 0 输入）的伴随 ∂L/∂x₀（如需对初值求导）。
+    /// `Nested` 策略走二分嵌套反转（[`CheckpointManager::backward_nested`]）。
     pub fn backward(
         &mut self,
         ctx: &mut Context<f64>,
@@ -106,6 +107,22 @@ impl<R: Recomputable> CheckpointManager<R> {
         assert!(self.steps_seen > 0, "no forward steps recorded");
         ctx.zero_grads();
 
+        if matches!(
+            self.strategy,
+            crate::strategy::CheckpointStrategy::Nested { .. }
+        ) {
+            let budget = match &self.strategy {
+                crate::strategy::CheckpointStrategy::Nested { budget } => *budget,
+                _ => unreachable!(),
+            };
+            sim.load_state(&self.initial);
+            // load_state 只刷新标量镜像；Phase A 的 no_grad 步进消费 AD 状态，
+            // 必须先 bind_state 重建（产生的两个叶子不参与任何窗口，梯度恒 0）
+            sim.bind_state(ctx);
+            return self.reverse_window(ctx, sim, loss, self.steps_seen, budget, None, true);
+        }
+
+        // ---- 平面分段路径 ----
         // 段边界：初始 0 + 快照步号；末段终点 = steps_seen
         let mut bounds: Vec<usize> = Vec::with_capacity(self.snapshots.len() + 2);
         bounds.push(0);
@@ -159,5 +176,82 @@ impl<R: Recomputable> CheckpointManager<R> {
         }
 
         first_segment_input_adj
+    }
+
+    /// 二分嵌套反转：反转 [start, start+len)，前置条件为 sim 已位于 start。
+    ///
+    /// - budget == 0 或 len == 1：平面窗口（录 len 步 → 种子 → 反向）；
+    /// - 否则：前半段 no_grad 前进 k 步，先递归反尾段（继承窗口边界伴随与
+    ///   loss 种子），再**恢复本窗起点状态**、以尾段返回的中点边界伴随为
+    ///   输出种子反头段。
+    ///
+    /// 快照语义（tape 变体，与经典 Revolve 的差异，见设计文档 §12.3 第 17 条）：
+    /// 不需要共享快照池——每层递归帧在入口持有**本窗起点状态**即为一个
+    /// "快照槽"（Phase C 恢复的正是它），live 状态数 = 递归深度 = budget+1；
+    /// 峰值段 tape ≈ len/2^budget；重算 T(n,m) = ⌈n/2⌉ + T(⌊n/2⌋,m-1) +
+    /// T(⌈n/2⌉,m-1)，T(n,0) = n。
+    ///
+    /// 返回窗口输入状态的伴随。
+    #[allow(clippy::too_many_arguments)]
+    fn reverse_window(
+        &mut self,
+        ctx: &mut Context<f64>,
+        sim: &mut R,
+        loss: &dyn Fn(&mut Context<f64>, &R) -> AD<f64>,
+        len: usize,
+        budget: usize,
+        boundary: Option<&[f64]>,
+        terminal: bool,
+    ) -> Vec<f64> {
+        if len == 0 {
+            return Vec::new();
+        }
+        if budget == 0 || len == 1 {
+            // 平面窗口
+            let input_vars = sim.bind_state(ctx);
+            for _ in 0..len {
+                sim.step(ctx);
+            }
+            let mut seeds: Vec<(AD<f64>, f64)> = Vec::new();
+            if let Some(b) = boundary {
+                for (v, &a) in sim.state().iter().zip(b.iter()) {
+                    seeds.push((*v, a));
+                }
+            }
+            if terminal {
+                let l = loss(ctx, sim);
+                seeds.push((l, 1.0));
+            }
+            ctx.backward_seeds(&seeds);
+            let adj: Vec<f64> = input_vars
+                .iter()
+                .map(|&a| ctx.grad_of(a).unwrap_or(0.0))
+                .collect();
+            ctx.clear_tape();
+            return adj;
+        }
+
+        // 本帧持有的起点状态 = 一个"快照槽"（Phase C 恢复用）
+        let start_state = sim.save_state();
+
+        // 二分：前半段 k = ⌈len/2⌉（div_ceil，MSRV 1.73）
+        let k = len.div_ceil(2);
+
+        // Phase A：no_grad 前进 k 步（不录带），sim 到达中点 = 尾窗起点
+        for _ in 0..k {
+            ctx.no_grad(|c| sim.step(c));
+        }
+
+        // Phase B：反尾段 [start+k, len)。尾窗输出 = 本窗输出 → 继承 boundary
+        // 与 terminal；其输入边界伴随 = 中点状态伴随，供头窗作输出种子。
+        let adj_at_mid =
+            self.reverse_window(ctx, sim, loss, len - k, budget - 1, boundary, terminal);
+
+        // Phase C：恢复本窗起点状态，以中点伴随为输出种子反头段 [start, k)
+        sim.load_state(&start_state);
+        // 同入口陷阱：load_state 后 AD 视图过期，头窗（若为嵌套）的 Phase A
+        // 会消费它——必须先 bind_state 重建
+        sim.bind_state(ctx);
+        self.reverse_window(ctx, sim, loss, k, budget - 1, Some(&adj_at_mid), false)
     }
 }

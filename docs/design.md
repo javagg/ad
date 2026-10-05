@@ -574,15 +574,17 @@ impl<S: Scalar> CustomOp<S> for ImplicitSolve<R> {
 
 #### 4.4.2 调度算法
 
-v0.2 只列了"每 K 步 / sqrt(n)"两种策略名。这里把算法学补全——三者各有明确适用面：
+v0.2 只列了"每 K 步 / sqrt(n)"两种策略名。这里把算法学补全（实现状态见 §12.3 第 17 条）：
 
-| 策略 | 快照内存 | 重算开销 | 前提 | 适用 |
+| 策略 | 快照/状态内存 | 峰值段 tape | 重算开销 | 适用 |
 |------|---------|---------|------|------|
-| **Uniform（interval K）** | (n/K) 个快照 + 单段 K 步的 tape | 每段平均重算 K/2 步，总计 ≈ 0.5n 步 | — | 简单可控、步长均匀 |
-| **Binomial / Revolve**（Griewank; Griewank & Walther 2000） | 给定快照预算 m 时**理论最小**重算次数（二项式系数递推调度） | m ≈ √n 时约 2–3× 单次前向 | 需预知总步数 n | 离线最优，默认推荐 |
-| **Online**（Stumm–Walther） | 固定内存预算内动态决定覆盖哪个旧快照 | 略高于离线最优 | 轨迹长度未知 | 流式 rollout：MPC 滚动优化、无限时长仿真 |
+| **Uniform（interval K）** | n/K 个快照 | ≈ n/K | 每步恰好一次（1× 前向） | 简单可控、默认推荐 |
+| **Nested（budget m）**：二分嵌套反转（Revolve 思想的 tape 变体） | live 状态 m+1 个 | ≈ n/2^m | ≈ (m+1)/2 × 前向（递归 T(n,m) = ⌈n/2⌉ + T(⌊n/2⌋,m-1) + T(⌈n/2⌉,m-1)） | 状态大而单步 tape 小（快照比 tape 贵）；内存-重算旋钮 |
+| **Online**（Stumm–Walther 思路） | 固定预算 m 个快照（保留最近 m 个） | ≈ n/m | 1× 前向 | 流式 rollout：MPC 滚动优化、轨迹长度未知 |
 
-v0.2 的 `Sqrt` 策略即 Binomial 在 m=√n 处的特例，保留为 `Binomial` 的便捷预设。
+经典 Griewank–Walther **二项式调度**（Algorithm 799）最小化的是**纯伴随反转**（无
+tape，每步局部 Jacobian 即用即弃）下的总前向次数，其 B(k, m-1) ≥ n-k 的窗口选择
+不适用于 tape 架构——tape 变体改为平衡二分（见 §12.3 第 17 条的推导与实测）。
 
 #### 4.4.3 接口设计（修正版）
 
@@ -1157,6 +1159,15 @@ M1–M4 核心能力已实现并通过测试（约 60 个测试，`cargo test --
     场景，列为潜在锚点）、PyTorch OpInfo 表驱动回归、Julia ChainRulesTestUtils
     `test_rule`、CUTEst/COPS 端到端问题库——本项目以"双数/复步 oracle + 属性测试 +
     Taylor 余项 + 场景清单"组合覆盖了同等的正确性方法学。
+17. **嵌套反转（`Nested { budget }`）已实现**（§4.4.2）：二分嵌套是 Revolve 思想的
+    tape 变体——峰值段 tape ≈ n/2^m、live 状态 m+1、重算 ≈ (m+1)/2×（budget=2 时
+    2×、=6 时 3.5×，与递归 T(n,m) 的理论值逐步精确吻合）。经典二项式调度的
+    B(k, m-1) ≥ n-k 窗口条件针对纯伴随反转（无 tape），不适用于 tape 架构，故取
+    平衡二分。实现中踩掉两个隐蔽 bug，均属同一类**契约违反**：`Recomputable`
+    的"load_state 后必须 bind_state"在嵌套路径被跳过——top 入口与 Phase C 的
+    `load_state` 只刷新标量镜像，后续 no_grad 步进消费的是**过期的 AD 状态**
+    （前向 pass 或上一窗口的遗留），梯度静默错误且随 budget 加深。教训已写入
+    `ad-checkpoint` crate 文档与 `Recomputable` 契约注释。
 
 ### 12.4 里程碑完成情况
 

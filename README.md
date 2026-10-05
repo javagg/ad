@@ -32,6 +32,7 @@ v0.1：M1–M5 里程碑的核心能力已实现并有测试覆盖（详见设�
 | `CustomOp`（custom_vjp 风格，多输出 + 残差） | ✅ |
 | IFT 隐式求解模式（Newton + 双数 Jacobian + 伴随线性系统） | ✅ |
 | checkpoint 分段反向（Uniform / Online / 自定义调度，边界伴随传递） | ✅ |
+| 二分嵌套反转（`Nested { budget }`：峰值段 tape ≈ n/2^m，重算 ≈ (m+1)/2×，内存-重算旋钮） | ✅ |
 | 验证：双数 oracle、复步微分、中心差分、随机方向、proptest、∇Fuzz 式可微性检查 | ✅ |
 | Taylor 余项测试（科学计算社区标准验收法，dolfin-adjoint 实践） | ✅ |
 | 梯度裁剪（`clip_grad_norm` / `clip_grad_value`） | ✅ |
@@ -39,7 +40,7 @@ v0.1：M1–M5 里程碑的核心能力已实现并有测试覆盖（详见设�
 | criterion 基准 + 全局分配器无泄漏长稳测试 | ✅ |
 | wasm32 编译 + Yew 交互式 web demo | ✅ |
 | CI（fmt / clippy / test / wasm / 演示构建 / bench 冒烟） | ✅ |
-| Revolve/二项式调度 | ⏳ 见设计文档偏差说明 |
+| 经典 Revolve 二项式调度（纯伴随反转架构，无 tape） | ⏳ 见设计文档 §4.4.2/§12.3 |
 
 ## Workspace 结构
 
