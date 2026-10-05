@@ -234,3 +234,102 @@ fn benchmark_contact_ball_optimization() {
     eprintln!("z_T = {z_t:.4}（目标 0.12）");
     assert!((z_t - 0.12).abs() < 0.02, "z_T {z_t} too far from 0.12");
 }
+
+// ============================================================ 基准 3：接触 + iLQR
+
+use ad_optim::{Dynamics, IlqrCfg, QuadraticCost};
+
+/// 受控弹跳球（接触 + 重力 + 控制力）：x = (z, v)，u = 控制加速度。
+/// a = f_contact − g + u（m = 1，重力向下，接触力向上）。
+struct ContactBallDyn {
+    k: f64,
+    p: f64,
+    d: f64,
+    eps: f64,
+    dt: f64,
+}
+
+impl Dynamics for ContactBallDyn {
+    fn nx(&self) -> usize {
+        2
+    }
+    fn nu(&self) -> usize {
+        1
+    }
+    fn step(&self, ctx: &mut Context<f64>, x: &[AD<f64>], u: &[AD<f64>]) -> Vec<AD<f64>> {
+        let (z, v) = (x[0], x[1]);
+        let f = ctx.call_custom(
+            ad::ContactNormalOp,
+            &[
+                z,
+                v,
+                AD::constant(self.k),
+                AD::constant(self.p),
+                AD::constant(self.d),
+                AD::constant(self.eps),
+            ],
+        );
+        let dt = AD::constant(self.dt);
+        let grav = AD::constant(9.81);
+        let fu = ctx.add(f[0], u[0]);
+        let a_no_u = ctx.sub(fu, grav);
+        let dv = ctx.mul(dt, a_no_u);
+        let v_n = ctx.add(v, dv);
+        let dz = ctx.mul(dt, v_n);
+        let z_n = ctx.add(z, dz);
+        vec![z_n, v_n]
+    }
+}
+
+/// 接触弹跳球 iLQR：目标高度 0.12，从 z0 = 0.4、v0 = 0 出发，
+/// 优化 100 步控制力序列。GD 版本（2 参数）用 21 迭代——iLQR 优化
+/// 全控制序列（100 维），应展示收敛质量对比。
+#[test]
+fn benchmark_contact_ilqr() {
+    let d = ContactBallDyn {
+        k: 200.0,
+        p: 1.5,
+        d: 0.02,
+        eps: 1e-4,
+        dt: 0.005,
+    };
+    let t_total = 100;
+    let target = 0.12f64;
+
+    let cost = QuadraticCost {
+        q: vec![0.0, 0.0], // 运行状态不罚（中途自由弹跳）
+        r: vec![0.05],
+        qf: vec![50.0, 5.0],
+        goal: vec![target, 0.0],
+    };
+    // 初始控制：微小正弦激励
+    let u0: Vec<Vec<f64>> = (0..t_total)
+        .map(|t| vec![0.1 * (std::f64::consts::PI * t as f64 / t_total as f64).sin()])
+        .collect();
+    let cfg = IlqrCfg {
+        max_iters: 200,
+        mu0: 0.01,
+        ..Default::default()
+    };
+    let (u, rep) = ad_optim::solve_ilqr(&d, &[0.4, 1.5], &u0, &cost, &cfg);
+
+    eprintln!(
+        "接触 iLQR：loss {:.4} → {:.6}（{} 迭代，converged = {}）",
+        rep.loss0, rep.loss, rep.iters, rep.converged
+    );
+    // 接触 iLQR 的局部性：穿透接触的线性化在深穿透区梯度差——iLQR 常陷于
+    // 局部解（Howell et al. 2022 §6.2 的发现）。断言为"有改善 + 有限"。
+    assert!(
+        rep.loss < rep.loss0,
+        "loss should improve: {} → {}",
+        rep.loss0,
+        rep.loss
+    );
+    let (x, _) = ad_optim::rollout(&d, &[0.4, 1.5], &u, &cost);
+    eprintln!("z_T = {:.4}（目标 {target}）", x[t_total][0]);
+    assert!(
+        (x[t_total][0] - target).abs() < 0.05,
+        "z_T {} too far from {target}",
+        x[t_total][0]
+    );
+}
