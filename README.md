@@ -33,6 +33,7 @@ v0.1：M1–M5 里程碑的核心能力已实现并有测试覆盖（详见设�
 | IFT 隐式求解模式（Newton + 双数 Jacobian + 伴随线性系统） | ✅ |
 | checkpoint 分段反向（Uniform / Online / 自定义调度，边界伴随传递） | ✅ |
 | 验证：双数 oracle、复步微分、中心差分、随机方向、proptest、∇Fuzz 式可微性检查 | ✅ |
+| Taylor 余项测试（科学计算社区标准验收法，dolfin-adjoint 实践） | ✅ |
 | 梯度裁剪（`clip_grad_norm` / `clip_grad_value`） | ✅ |
 | §5.3 物理场景清单：自由落体（解析解）、弹跳接触、12 体弹簧链（26 维） | ✅ |
 | criterion 基准 + 全局分配器无泄漏长稳测试 | ✅ |

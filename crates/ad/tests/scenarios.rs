@@ -43,6 +43,14 @@ fn scenario_free_fall_matches_analytic() {
         (got - expect).abs() <= 1e-12 * (1.0 + expect.abs()),
         "ad {got} vs analytic {expect}"
     );
+
+    // Taylor 余项测试（对 g 的标量化损失）自洽性
+    let f = |p: &[f64]| {
+        let pt = p0 + v0 * DT * (T as f64) - p[0] * DT * DT * ((T * (T + 1) / 2) as f64);
+        (pt - target) * (pt - target)
+    };
+    let report = GradientChecker::default().taylor_test(f, &[g], &[got], Some(&[1.0]));
+    assert!(report.passed, "taylor order {}", report.estimated_order);
 }
 
 // ============================================================ 2. 弹跳球（平滑接触）
@@ -161,6 +169,10 @@ fn scenario_bouncing_ball_contact_gradients() {
     assert!(grads.iter().all(|g| g.is_finite()));
     let health = GradientChecker::default().analyze_health(&grads);
     assert_eq!(health.nonfinite_fraction, 0.0);
+
+    // Taylor 余项测试：前向值与梯度自洽（接触力已 ε-平滑 → 解析可微）
+    let report = GradientChecker::default().taylor_test(rollout_loss, &params, &grads, None);
+    assert!(report.passed, "taylor order {}", report.estimated_order);
 }
 
 // ============================================================ 3. 多体弹簧链（12 体）
@@ -310,6 +322,10 @@ fn scenario_mass_spring_chain_random_direction() {
     let health = GradientChecker::default().analyze_health(&grads);
     assert_eq!(health.nonfinite_fraction, 0.0);
     assert!(health.norm.is_finite() && health.norm > 0.0);
+
+    // Taylor 余项测试（26 维：自动随机方向 + 正交重采样）
+    let report = GradientChecker::default().taylor_test(rollout_loss, &params, &grads, None);
+    assert!(report.passed, "taylor order {}", report.estimated_order);
 }
 
 // ============================================================ 4. 单步逐坐标 FD（backward 推导隔离器）

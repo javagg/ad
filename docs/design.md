@@ -706,6 +706,16 @@ impl GradientChecker {
         n_directions: usize,
     ) -> CheckResult
     where F: Fn(&[f64]) -> f64;
+
+    /// Taylor 余项测试（实现期采纳的科学计算社区标准验收法，dolfin-adjoint /
+    /// Firedrake / pyadjoint 实践）：
+    /// ratio(h) = |J(x+hδ)−J(x)−h·⟨∇J,δ⟩| / |J(x+hδ)−J(x)| = O(h)，
+    /// 估计收敛阶并报告。同时约束前向值与梯度自洽，无绝对容差魔法数；
+    /// 错误梯度（系数/方向错）与非光滑点都表现为 order ≈ 0。
+    pub fn taylor_test<F>(
+        &self, f: F, x: &[f64], grad: &[f64], direction: Option<&[f64]>,
+    ) -> TaylorReport
+    where F: Fn(&[f64]) -> f64;
 }
 ```
 
@@ -1140,6 +1150,13 @@ M1–M4 核心能力已实现并通过测试（约 60 个测试，`cargo test --
     手工 backward vs 前向 FD）、12 体半隐式弹簧链（26 维梯度，随机方向 FD + 健康度）
     已入库（`crates/ad/tests/scenarios.rs`）；单步逐坐标 FD 作为 CustomOp 接入的标准
     隔离器一并提供。
+16. **Taylor 余项测试已采纳**（§4.5.1，AD 领域工业验收方法调研后的结论）：
+    `ad-verify::GradientChecker::taylor_test` 实现 `ratio(h) = O(h)` 收敛阶判据
+    （dolfin-adjoint / Firedrake / pyadjoint 实践），已接入三个物理场景测试。
+    参照的工业测试基础设施谱系：跨工具基准 GradBench（MIT ADBench 继任者，无物理
+    场景，列为潜在锚点）、PyTorch OpInfo 表驱动回归、Julia ChainRulesTestUtils
+    `test_rule`、CUTEst/COPS 端到端问题库——本项目以"双数/复步 oracle + 属性测试 +
+    Taylor 余项 + 场景清单"组合覆盖了同等的正确性方法学。
 
 ### 12.4 里程碑完成情况
 

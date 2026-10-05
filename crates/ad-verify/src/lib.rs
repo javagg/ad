@@ -355,4 +355,134 @@ impl GradientChecker {
             consistent: max_dev <= tolerance,
         }
     }
+
+    /// Taylor 余项测试（科学计算 AD 社区的标准验收方法，dolfin-adjoint /
+    /// Firedrake / pyadjoint 的实践；设计文档 §4.5.1）。
+    ///
+    /// 验证 `ratio(h) = |J(x+hδ) − J(x) − h·⟨∇J,δ⟩| / |J(x+hδ) − J(x)|` 随 h
+    /// 减半按 **O(h)** 收敛（余项 O(h²) ÷ 分母 O(h)）——同时约束前向值与梯度的
+    /// 自洽性，不依赖绝对容差，只看收敛阶。
+    ///
+    /// - 梯度正确 → `estimated_order ≈ 1`；
+    /// - 梯度错（系数错/方向错）→ ratio 趋于非零常数，order ≈ 0 → 失败；
+    /// - 非光滑点 → ratio ≈ 1，order ≈ 0 → 失败（此时应先用
+    ///   [`GradientChecker::check_differentiability`] 区分原因）。
+    ///
+    /// `direction: None` 时自动选取确定性随机单位向量（若方向与梯度近乎正交
+    /// 以至于测试无信息量，会自动重采样若干次）。h 序列为 2⁻¹…2⁻²⁰。
+    pub fn taylor_test<F>(
+        &self,
+        f: F,
+        x: &[f64],
+        grad: &[f64],
+        direction: Option<&[f64]>,
+    ) -> TaylorReport
+    where
+        F: Fn(&[f64]) -> f64,
+    {
+        const MIN_ORDER: f64 = 0.8;
+        const NOISE_FLOOR: f64 = 1e-12;
+        assert_eq!(x.len(), grad.len(), "x and grad must have the same length");
+        let n = x.len();
+
+        // 方向选择：用户给定，或确定性随机单位向量（重采样避开零信息方向）
+        let mut rng = Rng::new(0x5851D44A20260B1);
+        let dir: Vec<f64> = match direction {
+            Some(d) => {
+                assert_eq!(d.len(), n, "direction length mismatch");
+                d.to_vec()
+            }
+            None => {
+                let gnorm = grad.iter().map(|g| g * g).sum::<f64>().sqrt();
+                let mut picked = None;
+                for _ in 0..8 {
+                    let mut d: Vec<f64> = (0..n).map(|_| rng.next_signed()).collect();
+                    let dn = d.iter().map(|a| a * a).sum::<f64>().sqrt();
+                    if dn == 0.0 {
+                        continue;
+                    }
+                    for a in &mut d {
+                        *a /= dn;
+                    }
+                    let gd: f64 = grad.iter().zip(&d).map(|(g, dd)| g * dd).sum();
+                    if gd.abs() > 1e-8 * gnorm {
+                        picked = Some(d);
+                        break;
+                    }
+                    picked = Some(d);
+                }
+                picked.unwrap_or_else(|| {
+                    let mut d = vec![0.0; n];
+                    d[0] = 1.0;
+                    d
+                })
+            }
+        };
+
+        let j0 = f(x);
+        let gd: f64 = grad.iter().zip(&dir).map(|(g, d)| g * d).sum();
+
+        // h = 2⁻¹ … 2⁻²⁰
+        let mut hs = Vec::with_capacity(20);
+        let mut ratios = Vec::with_capacity(20);
+        let mut h = 0.5f64;
+        for _ in 0..20 {
+            let xp: Vec<f64> = x.iter().zip(&dir).map(|(&xi, &d)| xi + h * d).collect();
+            let j1 = f(&xp);
+            let den = (j1 - j0).abs();
+            let residual = (j1 - j0 - h * gd).abs();
+            hs.push(h);
+            ratios.push(if den > 0.0 { residual / den } else { f64::NAN });
+            h *= 0.5;
+        }
+
+        // 相邻两档 h 的局部收敛阶（h 每次减半 → log2(h_i/h_{i+1}) = 1）
+        let mut orders = Vec::with_capacity(ratios.len().saturating_sub(1));
+        for w in ratios.windows(2) {
+            let (r0, r1) = (w[0], w[1]);
+            if r0.is_finite() && r1.is_finite() && r0 > NOISE_FLOOR && r1 > NOISE_FLOOR {
+                orders.push((r0 / r1).ln() / 2f64.ln());
+            } else {
+                orders.push(f64::NAN);
+            }
+        }
+
+        // 取靠小 h 端（渐近区）的至多 4 个有效阶的中位数
+        let mut valid_tail: Vec<f64> = orders
+            .iter()
+            .rev()
+            .copied()
+            .filter(|o| o.is_finite())
+            .take(4)
+            .collect();
+        valid_tail.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let estimated_order = if valid_tail.is_empty() {
+            f64::NAN
+        } else {
+            valid_tail[valid_tail.len() / 2]
+        };
+        let passed = valid_tail.len() >= 2 && estimated_order >= MIN_ORDER;
+
+        TaylorReport {
+            hs,
+            ratios,
+            orders,
+            estimated_order,
+            passed,
+        }
+    }
+}
+
+/// [`GradientChecker::taylor_test`] 的报告。
+#[derive(Clone, Debug)]
+pub struct TaylorReport {
+    /// 测试用过的步长序列（2⁻¹…2⁻²⁰）
+    pub hs: Vec<f64>,
+    /// ratio(h) = |J(x+hδ)−J(x)−h·⟨∇J,δ⟩| / |J(x+hδ)−J(x)|
+    pub ratios: Vec<f64>,
+    /// 相邻两档 h 的局部收敛阶估计（与 hs 一一错位，NaN = 无效区间）
+    pub orders: Vec<f64>,
+    /// 靠小 h 端有效阶的中位数；正确一阶梯度 ≈ 1
+    pub estimated_order: f64,
+    pub passed: bool,
 }

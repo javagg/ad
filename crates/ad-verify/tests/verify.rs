@@ -135,3 +135,68 @@ fn deterministic_rng_reproduces() {
         assert_eq!(da.numerical.to_bits(), db.numerical.to_bits());
     }
 }
+
+// ---- Taylor 余项测试（设计文档 §4.5.1，科学计算社区标准验收方法） ----
+
+use ad_verify::TaylorReport;
+
+#[test]
+fn taylor_test_passes_for_correct_gradient() {
+    let checker = GradientChecker::default();
+    let x = [0.3, -0.7];
+    let g = rosenbrock_grad(&x);
+    let report = checker.taylor_test(rosenbrock, &x, &g, None);
+    assert!(report.passed, "ratios: {:?}", report.ratios);
+    // 正确一阶梯度：ratio(h) = O(h) → 收敛阶 ≈ 1
+    assert!(
+        (report.estimated_order - 1.0).abs() < 0.25,
+        "estimated order {}",
+        report.estimated_order
+    );
+}
+
+#[test]
+fn taylor_test_fails_for_scaled_gradient() {
+    let checker = GradientChecker::default();
+    let x = [0.3, -0.7];
+    let mut wrong = rosenbrock_grad(&x);
+    for w in &mut wrong {
+        *w *= 1.1; // 系数错 10%：ratio → 非零常数，order ≈ 0
+    }
+    let report = checker.taylor_test(rosenbrock, &x, &wrong, None);
+    assert!(!report.passed);
+    assert!(
+        report.estimated_order < 0.5,
+        "order {}",
+        report.estimated_order
+    );
+}
+
+#[test]
+fn taylor_test_fails_for_rotated_gradient() {
+    let checker = GradientChecker::default();
+    let x = [0.3, -0.7];
+    let g = rosenbrock_grad(&x);
+    // 方向错（分量互换）：与真梯度成大角度 → ratio 不衰减
+    let wrong = [g[1], g[0]];
+    let report = checker.taylor_test(rosenbrock, &x, &wrong, None);
+    assert!(!report.passed);
+}
+
+#[test]
+fn taylor_test_fails_at_kink() {
+    let checker = GradientChecker::default();
+    // |x| 在 0 处（PAP 约定梯度为 0）：ratio ≡ 1，order ≈ 0
+    let report = checker.taylor_test(|x: &[f64]| x[0].abs(), &[0.0], &[0.0], Some(&[1.0]));
+    assert!(!report.passed, "ratios: {:?}", report.ratios);
+}
+
+#[test]
+fn taylor_test_explicit_direction() {
+    let checker = GradientChecker::default();
+    let f = |x: &[f64]| (x[0] * x[1] + x[2]).sin();
+    let x = [1.0, 2.0, 3.0];
+    let g = [2.0 * 5.0f64.cos(), 1.0 * 5.0f64.cos(), 5.0f64.cos()];
+    let report: TaylorReport = checker.taylor_test(f, &x, &g, Some(&[0.6, 0.8, 0.0]));
+    assert!(report.passed);
+}
