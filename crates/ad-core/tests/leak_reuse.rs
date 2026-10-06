@@ -66,14 +66,14 @@ impl CustomOp<f64> for ScaleOp {
     fn forward(
         &self,
         inputs: &[f64],
-    ) -> (smallvec::SmallVec<[f64; 4]>, smallvec::SmallVec<[f64; 8]>) {
+    ) -> (smallvec::SmallVec<[f64; 8]>, smallvec::SmallVec<[f64; 8]>) {
         let x = inputs[0];
         (
             smallvec::smallvec![x * 2.0, x * 3.0],
             smallvec::smallvec![x],
         )
     }
-    fn backward(&self, _residual: &[f64], grad_output: &[f64]) -> smallvec::SmallVec<[f64; 4]> {
+    fn backward(&self, _residual: &[f64], grad_output: &[f64]) -> smallvec::SmallVec<[f64; 8]> {
         smallvec::smallvec![grad_output[0] * 2.0 + grad_output[1] * 3.0]
     }
     fn name(&self) -> &'static str {

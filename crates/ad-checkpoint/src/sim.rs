@@ -20,7 +20,7 @@ impl CustomOp<f64> for PendulumStep {
         2
     }
 
-    fn forward(&self, inputs: &[f64]) -> (SmallVec<[f64; 4]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, inputs: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
         let (th, om, g, len, dt) = (inputs[0], inputs[1], inputs[2], inputs[3], inputs[4]);
         let th1 = th + dt * om;
         let om1 = om - dt * (g / len) * th.sin();
@@ -28,7 +28,7 @@ impl CustomOp<f64> for PendulumStep {
         (smallvec![th1, om1], residual)
     }
 
-    fn backward(&self, residual: &[f64], grad_output: &[f64]) -> SmallVec<[f64; 4]> {
+    fn backward(&self, residual: &[f64], grad_output: &[f64]) -> SmallVec<[f64; 8]> {
         // λ1 = ∂L/∂θ'，λ2 = ∂L/∂ω'
         let (lam1, lam2) = (grad_output[0], grad_output[1]);
         let (sin_th, cos_th, om, dt, g, len) = (
@@ -57,10 +57,12 @@ impl CustomOp<f64> for PendulumStep {
 pub struct PendulumSim {
     theta: f64,
     omega: f64,
-    state_ad: Vec<AD<f64>>,
+    state_ad: SmallVec<[AD<f64>; 4]>,
     g: AD<f64>,
     len: AD<f64>,
     dt: f64,
+    /// 算子句柄缓存：step 每步走 call_custom_dyn，避免 Rc::new 堆分配
+    op: std::rc::Rc<dyn CustomOp<f64>>,
     /// `step` 被调用的总次数（含 no_grad 重算）——监测嵌套反转的重算量
     pub steps_executed: usize,
 }
@@ -77,10 +79,11 @@ impl PendulumSim {
         let mut sim = PendulumSim {
             theta,
             omega,
-            state_ad: Vec::new(),
+            state_ad: SmallVec::new(),
             g,
             len,
             dt,
+            op: std::rc::Rc::new(PendulumStep),
             steps_executed: 0,
         };
         sim.bind_state(ctx);
@@ -103,8 +106,8 @@ impl Recomputable for PendulumSim {
     fn bind_state(&mut self, ctx: &mut Context<f64>) -> Vec<AD<f64>> {
         let (th, _) = ctx.var(self.theta);
         let (om, _) = ctx.var(self.omega);
-        self.state_ad = vec![th, om];
-        self.state_ad.clone()
+        self.state_ad = smallvec![th, om];
+        self.state_ad.to_vec()
     }
 
     fn state(&self) -> &[AD<f64>] {
@@ -120,7 +123,7 @@ impl Recomputable for PendulumSim {
             self.len,
             AD::constant(self.dt),
         ];
-        let outs = ctx.call_custom(PendulumStep, &inputs);
+        let outs = ctx.call_custom_dyn(self.op.clone(), "pendulum_step", &inputs);
         self.theta = outs[0].value;
         self.omega = outs[1].value;
         self.state_ad = outs;

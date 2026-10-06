@@ -35,7 +35,7 @@ impl CustomOp<f64> for GyroscopicStep {
         3
     }
 
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 4]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
         let w = [i[0], i[1], i[2]];
         let ia = [i[3], i[4], i[5]];
         let dt = i[6];
@@ -53,7 +53,7 @@ impl CustomOp<f64> for GyroscopicStep {
     // - `∂a1/∂ω2 = I3ω3/I1`，`∂a1/∂ω3 = −I2ω2/I1`，`∂a1/∂ω1 = 0`（循环）
     // - `λω = λω' − dt·(∂a/∂ω)ᵀλω'`；`λdt = −Σλω'·a`；`λI = −dt·Σλω'·∂a/∂I`
     //   （I 的导数含 −a/I 自身项，双重负号相消，系数保持不变）
-    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 4]> {
+    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
         let (w1, w2, w3) = (r[0], r[1], r[2]);
         let (i1, i2, i3) = (r[3], r[4], r[5]);
         let dt = r[6];

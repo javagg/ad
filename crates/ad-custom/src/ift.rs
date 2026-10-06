@@ -124,7 +124,7 @@ impl<R: Residual> CustomOp<f64> for ImplicitSolve<R> {
         self.resid.nx()
     }
 
-    fn forward(&self, theta: &[f64]) -> (SmallVec<[f64; 4]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, theta: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
         let nx = self.resid.nx();
         let mut x = vec![0.0; nx];
         for _ in 0..self.cfg.max_iters {
@@ -147,7 +147,7 @@ impl<R: Residual> CustomOp<f64> for ImplicitSolve<R> {
         (x.iter().copied().collect(), residual)
     }
 
-    fn backward(&self, residual: &[f64], grad_output: &[f64]) -> SmallVec<[f64; 4]> {
+    fn backward(&self, residual: &[f64], grad_output: &[f64]) -> SmallVec<[f64; 8]> {
         let nt = self.resid.ntheta();
         let nx = self.resid.nx();
         let theta = &residual[..nt];

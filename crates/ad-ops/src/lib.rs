@@ -339,7 +339,7 @@ pub fn axpy_with<S: Scalar>(
     alpha: AD<S>,
     x: &[AD<S>],
     y: &[AD<S>],
-) -> Vec<AD<S>> {
+) -> SmallVec<[AD<S>; 4]> {
     assert_eq!(x.len(), y.len(), "axpy: length mismatch");
     let mut inputs = Vec::with_capacity(1 + 2 * x.len());
     inputs.push(alpha);
@@ -359,7 +359,7 @@ pub fn dot<S: Scalar>(a: &[AD<S>], b: &[AD<S>]) -> AD<S> {
 }
 
 /// `out = α·x + y`：线程局部版本
-pub fn axpy<S: Scalar>(alpha: AD<S>, x: &[AD<S>], y: &[AD<S>]) -> Vec<AD<S>> {
+pub fn axpy<S: Scalar>(alpha: AD<S>, x: &[AD<S>], y: &[AD<S>]) -> SmallVec<[AD<S>; 4]> {
     ad_core::with_context(|c: &mut Context<S>| axpy_with(c, alpha, x, y))
 }
 
@@ -382,7 +382,7 @@ impl<S: Scalar> CustomOp<S> for DotOp {
     fn num_outputs(&self) -> usize {
         1
     }
-    fn forward(&self, inputs: &[S]) -> (SmallVec<[S; 4]>, SmallVec<[S; 8]>) {
+    fn forward(&self, inputs: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
         let n = self.n;
         let mut sum = S::zero();
         for i in 0..n {
@@ -390,7 +390,7 @@ impl<S: Scalar> CustomOp<S> for DotOp {
         }
         (smallvec![sum], inputs.iter().copied().collect())
     }
-    fn backward(&self, residual: &[S], grad_output: &[S]) -> SmallVec<[S; 4]> {
+    fn backward(&self, residual: &[S], grad_output: &[S]) -> SmallVec<[S; 8]> {
         let n = self.n;
         let g = grad_output[0];
         let mut grads = SmallVec::new();
@@ -419,7 +419,7 @@ impl<S: Scalar> CustomOp<S> for AxpyOp {
     fn num_outputs(&self) -> usize {
         self.n
     }
-    fn forward(&self, inputs: &[S]) -> (SmallVec<[S; 4]>, SmallVec<[S; 8]>) {
+    fn forward(&self, inputs: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
         let n = self.n;
         let alpha = inputs[0];
         let mut outs = SmallVec::new();
@@ -431,7 +431,7 @@ impl<S: Scalar> CustomOp<S> for AxpyOp {
         residual.extend_from_slice(&inputs[1..1 + n]); // x
         (outs, residual)
     }
-    fn backward(&self, residual: &[S], grad_output: &[S]) -> SmallVec<[S; 4]> {
+    fn backward(&self, residual: &[S], grad_output: &[S]) -> SmallVec<[S; 8]> {
         let n = self.n;
         let alpha = residual[0];
         let mut grads = SmallVec::new();
@@ -465,14 +465,14 @@ impl<S: Scalar> CustomOp<S> for Norm2Op {
     fn num_outputs(&self) -> usize {
         1
     }
-    fn forward(&self, inputs: &[S]) -> (SmallVec<[S; 4]>, SmallVec<[S; 8]>) {
+    fn forward(&self, inputs: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
         let mut sq = S::zero();
         for &v in inputs {
             sq = sq + v * v;
         }
         (smallvec![sq.sqrt()], inputs.iter().copied().collect())
     }
-    fn backward(&self, residual: &[S], grad_output: &[S]) -> SmallVec<[S; 4]> {
+    fn backward(&self, residual: &[S], grad_output: &[S]) -> SmallVec<[S; 8]> {
         let norm = (residual.iter().fold(S::zero(), |a, &v| a + v * v)).sqrt();
         let g = grad_output[0];
         residual.iter().map(|&v| g * v / norm).collect()

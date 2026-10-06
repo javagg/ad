@@ -3,6 +3,7 @@ use crate::context::Context;
 use crate::custom_op::CustomOp;
 use crate::node::Variable;
 use crate::scalar::Scalar;
+use smallvec::SmallVec;
 use std::any::{type_name, Any};
 use std::cell::RefCell;
 use std::marker::PhantomData;
@@ -107,7 +108,11 @@ impl<S: Scalar> ContextGuard<S> {
         with_context(|c: &mut Context<S>| c.set_detect_anomaly(on))
     }
 
-    pub fn call_custom<O: CustomOp<S> + 'static>(&self, op: O, inputs: &[AD<S>]) -> Vec<AD<S>> {
+    pub fn call_custom<O: CustomOp<S> + 'static>(
+        &self,
+        op: O,
+        inputs: &[AD<S>],
+    ) -> SmallVec<[AD<S>; 4]> {
         with_context(|c: &mut Context<S>| c.call_custom(op, inputs))
     }
 }

@@ -35,14 +35,14 @@ impl CustomOp<f64> for ContactNormalOp {
     fn num_outputs(&self) -> usize {
         1
     }
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 4]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
         let (gap, gv, k, p, d, eps) = (i[0], i[1], i[2], i[3], i[4], i[5]);
         let rho = (gap * gap + eps * eps).sqrt();
         let pen = 0.5 * (-gap + rho);
         let f = pen.powf(p) * (k - d * gv);
         (smallvec![f], i.iter().copied().collect())
     }
-    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 4]> {
+    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
         let (gap, gv, k, p, d, eps) = (r[0], r[1], r[2], r[3], r[4], r[5]);
         let lf = go[0];
         let rho = (gap * gap + eps * eps).sqrt();
@@ -83,7 +83,7 @@ impl CustomOp<f64> for RegularizedFrictionOp {
     fn num_outputs(&self) -> usize {
         2
     }
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 4]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
         let (fn_, vx, vy, mu, eps) = (i[0], i[1], i[2], i[3], i[4]);
         let r = (vx * vx + vy * vy + eps * eps).sqrt();
         (
@@ -91,7 +91,7 @@ impl CustomOp<f64> for RegularizedFrictionOp {
             i.iter().copied().collect(),
         )
     }
-    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 4]> {
+    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
         let (fn_, vx, vy, mu, eps) = (r[0], r[1], r[2], r[3], r[4]);
         let (lx, ly) = (go[0], go[1]);
         let s2 = vx * vx + vy * vy;

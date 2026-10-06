@@ -19,7 +19,7 @@ impl CustomOp<f64> for SpatialCrossMotion {
     fn num_outputs(&self) -> usize {
         6
     }
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 4]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
         let (w1, v1) = (&i[0..3], &i[3..6]);
         let (w2, v2) = (&i[6..9], &i[9..12]);
         let a = |x: &[f64], y: &[f64]| spatial::cross(&[x[0], x[1], x[2]], &[y[0], y[1], y[2]]);
@@ -38,7 +38,7 @@ impl CustomOp<f64> for SpatialCrossMotion {
             i.iter().copied().collect(),
         )
     }
-    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 4]> {
+    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
         let (w1, v1) = (&r[0..3], &r[3..6]);
         let (lw, lv) = (&go[0..3], &go[3..6]);
         let cr = |x: &[f64], y: &[f64]| spatial::cross(&[x[0], x[1], x[2]], &[y[0], y[1], y[2]]);
@@ -78,7 +78,7 @@ impl CustomOp<f64> for PluckerMotion {
     fn num_outputs(&self) -> usize {
         6
     }
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 4]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
         let e: &[f64; 9] = (&i[0..9]).try_into().unwrap();
         let r: &[f64; 3] = (&i[9..12]).try_into().unwrap();
         let (w, v) = (&i[12..15], &i[15..18]);
@@ -97,7 +97,7 @@ impl CustomOp<f64> for PluckerMotion {
             i.iter().copied().collect(),
         )
     }
-    fn backward(&self, r_in: &[f64], go: &[f64]) -> SmallVec<[f64; 4]> {
+    fn backward(&self, r_in: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
         let e: &[f64; 9] = (&r_in[0..9]).try_into().unwrap();
         let r: &[f64; 3] = (&r_in[9..12]).try_into().unwrap();
         let (w, v) = (&r_in[12..15], &r_in[15..18]);
@@ -143,7 +143,7 @@ impl CustomOp<f64> for PluckerForce {
     fn num_outputs(&self) -> usize {
         6
     }
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 4]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
         let e: &[f64; 9] = (&i[0..9]).try_into().unwrap();
         let r: &[f64; 3] = (&i[9..12]).try_into().unwrap();
         let (n, f) = (&i[12..15], &i[15..18]);
@@ -163,7 +163,7 @@ impl CustomOp<f64> for PluckerForce {
             i.iter().copied().collect(),
         )
     }
-    fn backward(&self, r_in: &[f64], go: &[f64]) -> SmallVec<[f64; 4]> {
+    fn backward(&self, r_in: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
         let e: &[f64; 9] = (&r_in[0..9]).try_into().unwrap();
         let r: &[f64; 3] = (&r_in[9..12]).try_into().unwrap();
         let (n, f) = (&r_in[12..15], &r_in[15..18]);
@@ -205,7 +205,7 @@ impl CustomOp<f64> for InertiaApply {
     fn num_outputs(&self) -> usize {
         6
     }
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 4]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
         let ib = sym3::unpack(&[i[0], i[1], i[2], i[3], i[4], i[5]]);
         let m = i[6];
         let c: &[f64; 3] = (&i[7..10]).try_into().unwrap();
@@ -226,7 +226,7 @@ impl CustomOp<f64> for InertiaApply {
             i.iter().copied().collect(),
         )
     }
-    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 4]> {
+    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
         let ib = sym3::unpack(&[r[0], r[1], r[2], r[3], r[4], r[5]]);
         let m = r[6];
         let c: &[f64; 3] = (&r[7..10]).try_into().unwrap();
@@ -354,7 +354,7 @@ impl CustomOp<f64> for RotateInertia {
     fn num_outputs(&self) -> usize {
         10
     }
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 4]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
         let ib = sym3::unpack(&[i[0], i[1], i[2], i[3], i[4], i[5]]);
         let m = i[6];
         let c: &[f64; 3] = (&i[7..10]).try_into().unwrap();
@@ -410,7 +410,7 @@ impl CustomOp<f64> for RotateInertia {
         out.extend(ca);
         (out, i.iter().copied().collect())
     }
-    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 4]> {
+    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
         let ib = sym3::unpack(&[r[0], r[1], r[2], r[3], r[4], r[5]]);
         let m = r[6];
         let c: &[f64; 3] = (&r[7..10]).try_into().unwrap();
@@ -673,7 +673,7 @@ impl CustomOp<f64> for So3Exp {
     fn num_outputs(&self) -> usize {
         9
     }
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 4]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
         let w: &[f64; 3] = (&i[0..3]).try_into().unwrap();
         let r = spatial::so3_exp(w);
         (
@@ -681,7 +681,7 @@ impl CustomOp<f64> for So3Exp {
             smallvec![w[0], w[1], w[2]],
         )
     }
-    fn backward(&self, r_in: &[f64], go: &[f64]) -> SmallVec<[f64; 4]> {
+    fn backward(&self, r_in: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
         let w: &[f64; 3] = (&r_in[0..3]).try_into().unwrap();
         let lam: &[f64; 9] = (&go[0..9]).try_into().unwrap();
         let theta = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt();

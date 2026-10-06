@@ -14,11 +14,11 @@ impl CustomOp<f64> for PolyOp {
     fn num_outputs(&self) -> usize {
         2
     }
-    fn forward(&self, inputs: &[f64]) -> (SmallVec<[f64; 4]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, inputs: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
         let x = inputs[0];
         (smallvec![x * x, x * x * x], smallvec![x])
     }
-    fn backward(&self, residual: &[f64], grad_output: &[f64]) -> SmallVec<[f64; 4]> {
+    fn backward(&self, residual: &[f64], grad_output: &[f64]) -> SmallVec<[f64; 8]> {
         let x = residual[0];
         smallvec![grad_output[0] * 2.0 * x + grad_output[1] * 3.0 * x * x]
     }

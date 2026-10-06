@@ -73,7 +73,7 @@ impl CustomOp<f64> for BallStep {
     fn num_outputs(&self) -> usize {
         2
     }
-    fn forward(&self, i: &[f64]) -> (smallvec::SmallVec<[f64; 4]>, smallvec::SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[f64]) -> (smallvec::SmallVec<[f64; 8]>, smallvec::SmallVec<[f64; 8]>) {
         let (p, v, g, k, m, dt) = (i[0], i[1], i[2], i[3], i[4], i[5]);
         let pen = -p;
         let s = smooth_relu(pen);
@@ -81,7 +81,7 @@ impl CustomOp<f64> for BallStep {
         let p1 = p + dt * v1;
         (smallvec::smallvec![p1, v1], i.iter().copied().collect())
     }
-    fn backward(&self, r: &[f64], go: &[f64]) -> smallvec::SmallVec<[f64; 4]> {
+    fn backward(&self, r: &[f64], go: &[f64]) -> smallvec::SmallVec<[f64; 8]> {
         let (p, v, g, k, m, dt) = (r[0], r[1], r[2], r[3], r[4], r[5]);
         let (lp, lv) = (go[0], go[1]);
         // 关键：p' = p + dt·v' 的内部边（v' 是本算子的另一个输出）对 tape 不可见，
@@ -198,7 +198,7 @@ impl CustomOp<f64> for ChainStep {
     fn num_outputs(&self) -> usize {
         2 * self.n
     }
-    fn forward(&self, i: &[f64]) -> (smallvec::SmallVec<[f64; 4]>, smallvec::SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[f64]) -> (smallvec::SmallVec<[f64; 8]>, smallvec::SmallVec<[f64; 8]>) {
         let n = self.n;
         let (k, dt) = (i[2 * n], i[2 * n + 1]);
         let (x, v) = (&i[..n], &i[n..2 * n]);
@@ -214,7 +214,7 @@ impl CustomOp<f64> for ChainStep {
         }
         (outs, i.iter().copied().collect())
     }
-    fn backward(&self, r: &[f64], go: &[f64]) -> smallvec::SmallVec<[f64; 4]> {
+    fn backward(&self, r: &[f64], go: &[f64]) -> smallvec::SmallVec<[f64; 8]> {
         let n = self.n;
         let (k, dt) = (r[2 * n], r[2 * n + 1]);
         let (x, v) = (&r[..n], &r[n..2 * n]);
@@ -283,7 +283,7 @@ fn scenario_mass_spring_chain_random_direction() {
     // AD 路径：x0/v0/k 全部为叶子（2N+1 维梯度）；dt 为常量
     let mut ctx = Context::<f64>::new();
     let mut vars: Vec<Variable> = Vec::new();
-    let mut state: Vec<AD<f64>> = Vec::new();
+    let mut state: smallvec::SmallVec<[AD<f64>; 4]> = smallvec::SmallVec::new();
     for &v in &init {
         let (ad, var) = ctx.var(v);
         state.push(ad);

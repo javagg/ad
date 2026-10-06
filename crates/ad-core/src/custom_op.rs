@@ -18,10 +18,10 @@ pub trait CustomOp<S: Scalar> {
     fn num_outputs(&self) -> usize;
 
     /// 前向计算，返回 (输出值, 残差数据)
-    fn forward(&self, inputs: &[S]) -> (SmallVec<[S; 4]>, SmallVec<[S; 8]>);
+    fn forward(&self, inputs: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>);
 
     /// 反向计算（VJP）：给定残差和各输出的伴随值，返回各输入槽位的梯度
-    fn backward(&self, residual: &[S], grad_output: &[S]) -> SmallVec<[S; 4]>;
+    fn backward(&self, residual: &[S], grad_output: &[S]) -> SmallVec<[S; 8]>;
 
     /// 异常诊断用算子名
     fn name(&self) -> &'static str {

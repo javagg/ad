@@ -255,7 +255,7 @@ impl<S: Scalar> Context<S> {
                     outputs,
                     residual,
                 } => {
-                    let gout: SmallVec<[S; 4]> =
+                    let gout: SmallVec<[S; 8]> =
                         outputs.iter().map(|o| adjoints[o.index()]).collect();
                     if gout.iter().all(|&g| g == S::zero()) {
                         continue;
@@ -424,7 +424,11 @@ impl<S: Scalar> Context<S> {
     // ---- 自定义算子 ----
 
     /// 调用自定义算子：登记多输出节点，前向残差存入 tape（设计文档 §4.3.1）。
-    pub fn call_custom<O: CustomOp<S> + 'static>(&mut self, op: O, inputs: &[AD<S>]) -> Vec<AD<S>> {
+    pub fn call_custom<O: CustomOp<S> + 'static>(
+        &mut self,
+        op: O,
+        inputs: &[AD<S>],
+    ) -> SmallVec<[AD<S>; 4]> {
         let name = std::any::type_name::<O>();
         self.call_custom_dyn(Rc::new(op), name, inputs)
     }
@@ -435,14 +439,14 @@ impl<S: Scalar> Context<S> {
         op: Rc<dyn CustomOp<S>>,
         name: &'static str,
         inputs: &[AD<S>],
-    ) -> Vec<AD<S>> {
+    ) -> SmallVec<[AD<S>; 4]> {
         debug_assert_eq!(
             inputs.len(),
             op.num_inputs(),
             "input count mismatch for {}",
             name
         );
-        let vals: SmallVec<[S; 4]> = inputs.iter().map(|x| x.value).collect();
+        let vals: SmallVec<[S; 8]> = inputs.iter().map(|x| x.value).collect();
         let (outs, residual) = op.forward(&vals);
         debug_assert_eq!(
             outs.len(),
@@ -453,8 +457,8 @@ impl<S: Scalar> Context<S> {
         if self.no_grad_depth > 0 || inputs.iter().all(|x| x.node.is_none()) {
             return outs.iter().map(|&v| AD::constant(v)).collect();
         }
-        let out_ids: SmallVec<[NodeId; 4]> = outs.iter().map(|&v| self.alloc_node(v)).collect();
-        let tracked: SmallVec<[(usize, NodeId); 4]> = inputs
+        let out_ids: SmallVec<[NodeId; 8]> = outs.iter().map(|&v| self.alloc_node(v)).collect();
+        let tracked: SmallVec<[(usize, NodeId); 8]> = inputs
             .iter()
             .enumerate()
             .filter_map(|(slot, x)| x.node.map(|n| (slot, n)))
