@@ -1,8 +1,8 @@
 # HANDOFF — 项目状态与新 Session 接入指南
 
-> 写于 2026-10-06，同日多次更新。最后一次全量验证：**48 套件全绿**、clippy 零
-> 警告、wasm32 编译通过。本文档目标：新 session 零上下文即可继续推进，
-> 不丢任何关键决策/陷阱/路径。
+> 写于 2026-10-06。**项目收尾版 v0.5.0**：最后全量验证 **48 套件全绿**、
+> clippy 零警告、wasm32 编译通过。42 条实现教训全部回写 design.md。
+> 本文目标：新 session 零上下文即可继续，不丢任何关键决策/陷阱/路径。
 
 ## 1. 项目概要
 
@@ -15,11 +15,11 @@
 ## 2. Crate 架构（9 个，依赖方向自上而下）
 
 ```
-ad-core    AD<S>标量、Context、Tape、CustomOp trait、线程局部挂载、双数oracle、no_grad/detach/异常检测
+ad-core    AD<S>标量（f64/f32）、Context、Tape（u32 节点 + 算子注册表）、CustomOp trait、线程局部挂载、双数oracle、no_grad/detach/异常检测
 ad-ops     基础算子全表（含 sin/cos/tanh/atan2/clamp/lerp 等）+ bulk 向量（dot/axpy/norm2）
 ad-custom  IFT 隐式求解模式（ImplicitSolve）、稠密线性求解
 ad-checkpoint  Recomputable 状态机、快照调度（Uniform/Nested/Online/Custom）、分段反向+边界伴随、PendulumSim
-ad-physics 空间代数算子（spatial.rs 辅助 + ops.rs 6个CustomOp + contact.rs 接触力）
+ad-physics 空间代数算子（泛型 f64/f32：spatial.rs 辅助 + ops.rs 6 CustomOp + contact.rs 接触力 + chain.rs 双摆 + gyro.rs 陀螺）
 ad-verify  FD/随机方向/Taylor余项/健康度/轨迹稳定性/可微性检查
 ad-optim   Armijo GD + Tassa正则化iLQR（Dynamics trait + AD逐列Jacobian）
 ad         facade：re-exports 全部 + prelude
@@ -48,6 +48,7 @@ ad-demo    Yew + trunk wasm32 web demo（三面板：标量/单摆checkpoint/IFT
 | （本次 5） | f32 物理算子泛型化（DoublePendulumStep + GyroscopicStep，f32/f64 对拍 + f32 能量守恒漂移 3.8e-3）；文档 v0.3.9 |
 | （本次 6） | box-DDP control-limited backward pass（solve_kk_boxed，投影坐标下降；松界逐位等价 / 界宽单调 / 饱和断言）；文档 v0.4.0 |
 | （本次 7） | f32 体系收尾（第 40 条）：接触算子泛型化 + 验证器泛型化（validate_custom_op<S>，f32 直接 FD 验证）；文档 v0.4.1 |
+| （本次 8） | 项目收尾（第 41–42 条）：空间代数 f32 全量泛型化 + tape 瘦身/算子注册表（字节 −30~44%）；v0.5.0 |
 | （本次） | 工具链与场景补全（§12.3 第 28 条）：条件数探针、matvec、**Custom 记录槽位路由潜伏 bug 修复**、记录瘦身（单摆 −59%/−63% 累计）、iLQR LU 多右端、10⁴ 步链场景、§5.4 验收 bench；文档 v0.3.5 |
 
 ## 4. 关键设计决策与陷阱（新 session 必读）
@@ -156,10 +157,17 @@ f32 标定（`f32.rs` + §5.1 表）、rayon 批量示例（`batch_rollout.rs`�
 4. ~~CustomOp 随机图 fuzz~~ ✅ 3 算子 × 24 步随机 DAG × 512 例 vs 双数 oracle，
    部分追踪形态 + 先规划后执行 + 值模拟缩放防对消（`fuzz_custom.rs`）。
 
-**仍开放的方向**：crates.io 发布（用户指示暂缓）；~~box-DDP~~ ✅ control-limited backward pass（第 39 条）；接触算子 ✅ 与空间代数
-算子的 f32 泛型化（第 38 条完成 2 个、第 40 条完成接触 2 个）；op_check f32 版 ✅（第 40 条）；OpRecord arena（压 CustomOp 框架开销 2.4–3.0×）；
-经典 Revolve / GradBench（研究性）。
+**仍开放的方向**（收尾后仅剩可选项）：crates.io 发布（用户指示暂缓）；
+经典 Revolve / GradBench 跨工具锚点（研究性）。
 
+**第四轮（第 41–42 条，项目收尾）**：
+- ~~空间代数 f32 化~~ ✅ spatial 辅助模块 + 全部 6 算子泛型化；f64 回归全过 +
+  f32 泛型验证器直接验证——**f32 覆盖至此为全量**（基础算子/bulk/全部物理算子）；
+- ~~OpRecord arena~~ ✅ 落地为记录瘦身 + 算子注册表：NodeId usize→u32（AD
+  24→16B）、Custom 记录去 Rc（注册表按指针去重，clear_tape 生命周期重置——
+  漏掉时被 50k 轮零泄漏测试当场抓出）；确定性收益：full-tape 字节/run
+  −44%、checkpoint −30%、scalar fresh −21%。墙钟 A/B 因本机噪声 2.5×
+  不可信，如实记录（字节为确定性指标）。
 **第三轮（第 37 条，规模实证与采用通道）**：
 - ~~规模实证~~ ✅ `examples/scale_stress.rs`：稀疏链 4000 维 × 10⁴ 步
   checkpoint 分段反向 0.93 s / 峰值 37.9 MiB（内存随 T 亚线性 ✓）；

@@ -147,6 +147,7 @@ fn fd_so3_exp() {
 fn so3_exp_forward_properties() {
     // RᵀR = I，det R = 1
     for w in [[0.3, -0.8, 0.5], [1.0, 1.0, 1.0], [-0.1, 0.0, 0.0]] {
+        let w: [f64; 3] = w;
         let r = spatial::so3_exp(&w);
         let rt = spatial::mat3_t(&r);
         let rtr = spatial::mat3_mul(&rt, &r);

@@ -1,17 +1,27 @@
 use std::fmt;
 
 /// 计算图节点标识。节点 ID 只对创建它的线程上的 `Context` 有意义。
+///
+/// 内部表示为 `u32`（§12.3 第 42 条 tape 瘦身）：AD 句柄与 tape 记录的
+/// 输入数组随之减半；`clear_tape` 后节点计数回到叶子水位之上，单代
+/// 记录数远低于 u32 上限（溢出由 debug_assert 守护）。
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NodeId(usize);
+pub struct NodeId(u32);
 
 impl NodeId {
     pub(crate) fn new(index: usize) -> Self {
-        NodeId(index)
+        debug_assert!(
+            index <= u32::MAX as usize,
+            "NodeId overflow: {} exceeds u32 (clear_tape resets the counter; \
+             a single tape generation should not exceed 2^32 records)",
+            index
+        );
+        NodeId(index as u32)
     }
 
     /// 节点在 `Context` 内部数组（伴随数组等）中的下标。
     pub fn index(self) -> usize {
-        self.0
+        self.0 as usize
     }
 }
 

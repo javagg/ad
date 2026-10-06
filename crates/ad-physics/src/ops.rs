@@ -1,10 +1,19 @@
 //! 空间代数参考 CustomOp 集（手写 VJP，全部由"单步逐坐标 FD"测试守护）。
 //!
-//! 输入/输出均为展平的 `f64` 切片，布局见各算子文档。约定见 [`crate::spatial`]。
+//! 输入/输出均为展平的 `S` 切片（`S: Scalar`——同一份 forward/手写 VJP
+//! 服务 f64 与 f32，§12.3 第 41 条），布局见各算子文档。约定见 [`crate::spatial`]。
+//! 泛型代码路径由 f64 的 FD 隔离器 + 动能不变性测试覆盖；f32 由泛型
+//! 验证器直接验证（`tests/f32_ops.rs`）。
 
 use crate::spatial::{self, sym3};
 use ad_core::{CustomOp, Scalar};
+use num_traits::NumCast;
 use smallvec::{smallvec, SmallVec};
+
+#[inline]
+fn c<S: Scalar>(v: f64) -> S {
+    NumCast::from(v).expect("spatial constant cast f64→S")
+}
 
 /// `out = crm(v1)·v2`（空间运动叉积）：
 /// `out = (ω1×ω2 ; v1×ω2 + ω1×v2)`。
@@ -12,17 +21,17 @@ use smallvec::{smallvec, SmallVec};
 #[derive(Clone, Copy)]
 pub struct SpatialCrossMotion;
 
-impl CustomOp<f64> for SpatialCrossMotion {
+impl<S: Scalar> CustomOp<S> for SpatialCrossMotion {
     fn num_inputs(&self) -> usize {
         12
     }
     fn num_outputs(&self) -> usize {
         6
     }
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
         let (w1, v1) = (&i[0..3], &i[3..6]);
         let (w2, v2) = (&i[6..9], &i[9..12]);
-        let a = |x: &[f64], y: &[f64]| spatial::cross(&[x[0], x[1], x[2]], &[y[0], y[1], y[2]]);
+        let a = |x: &[S], y: &[S]| spatial::cross(&[x[0], x[1], x[2]], &[y[0], y[1], y[2]]);
         let w = a(w1, w2);
         let t1 = a(v1, w2);
         let t2 = a(w1, v2);
@@ -38,13 +47,13 @@ impl CustomOp<f64> for SpatialCrossMotion {
             i.iter().copied().collect(),
         )
     }
-    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
+    fn backward(&self, r: &[S], go: &[S]) -> SmallVec<[S; 8]> {
         let (w1, v1) = (&r[0..3], &r[3..6]);
         let (lw, lv) = (&go[0..3], &go[3..6]);
-        let cr = |x: &[f64], y: &[f64]| spatial::cross(&[x[0], x[1], x[2]], &[y[0], y[1], y[2]]);
+        let cr = |x: &[S], y: &[S]| spatial::cross(&[x[0], x[1], x[2]], &[y[0], y[1], y[2]]);
         // g_v1 = (ω2×λω + v2×λv ; ω2×λv)
-        let w2: &[f64; 3] = (&r[6..9]).try_into().unwrap();
-        let v2: &[f64; 3] = (&r[9..12]).try_into().unwrap();
+        let w2: &[S; 3] = (&r[6..9]).try_into().unwrap();
+        let v2: &[S; 3] = (&r[9..12]).try_into().unwrap();
         let a = cr(w2, lw);
         let b = cr(v2, lv);
         let gv1w = [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
@@ -71,16 +80,16 @@ impl CustomOp<f64> for SpatialCrossMotion {
 #[derive(Clone, Copy)]
 pub struct PluckerMotion;
 
-impl CustomOp<f64> for PluckerMotion {
+impl<S: Scalar> CustomOp<S> for PluckerMotion {
     fn num_inputs(&self) -> usize {
         18
     }
     fn num_outputs(&self) -> usize {
         6
     }
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
-        let e: &[f64; 9] = (&i[0..9]).try_into().unwrap();
-        let r: &[f64; 3] = (&i[9..12]).try_into().unwrap();
+    fn forward(&self, i: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
+        let e: &[S; 9] = (&i[0..9]).try_into().unwrap();
+        let r: &[S; 3] = (&i[9..12]).try_into().unwrap();
         let (w, v) = (&i[12..15], &i[15..18]);
         let w_a = spatial::mat3_vec(e, &[w[0], w[1], w[2]]);
         let v_a0 = spatial::mat3_vec(e, &[v[0], v[1], v[2]]);
@@ -97,9 +106,9 @@ impl CustomOp<f64> for PluckerMotion {
             i.iter().copied().collect(),
         )
     }
-    fn backward(&self, r_in: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
-        let e: &[f64; 9] = (&r_in[0..9]).try_into().unwrap();
-        let r: &[f64; 3] = (&r_in[9..12]).try_into().unwrap();
+    fn backward(&self, r_in: &[S], go: &[S]) -> SmallVec<[S; 8]> {
+        let e: &[S; 9] = (&r_in[0..9]).try_into().unwrap();
+        let r: &[S; 3] = (&r_in[9..12]).try_into().unwrap();
         let (w, v) = (&r_in[12..15], &r_in[15..18]);
         let (lw, lv) = (&go[0..3], &go[3..6]);
         let et = spatial::mat3_t(e);
@@ -114,7 +123,7 @@ impl CustomOp<f64> for PluckerMotion {
         let wa = spatial::mat3_vec(e, &[w[0], w[1], w[2]]);
         let gr = spatial::cross(&wa, &[lv[0], lv[1], lv[2]]);
         // g_E = λω·ωᵀ + λv·vᵀ − (r×λv)·ωᵀ
-        let mut ge = [0.0; 9];
+        let mut ge = [S::zero(); 9];
         for i in 0..3 {
             for j in 0..3 {
                 ge[i * 3 + j] = lw[i] * w[j] + lv[i] * v[j] - rxlv[i] * w[j];
@@ -136,16 +145,16 @@ impl CustomOp<f64> for PluckerMotion {
 #[derive(Clone, Copy)]
 pub struct PluckerForce;
 
-impl CustomOp<f64> for PluckerForce {
+impl<S: Scalar> CustomOp<S> for PluckerForce {
     fn num_inputs(&self) -> usize {
         18
     }
     fn num_outputs(&self) -> usize {
         6
     }
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
-        let e: &[f64; 9] = (&i[0..9]).try_into().unwrap();
-        let r: &[f64; 3] = (&i[9..12]).try_into().unwrap();
+    fn forward(&self, i: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
+        let e: &[S; 9] = (&i[0..9]).try_into().unwrap();
+        let r: &[S; 3] = (&i[9..12]).try_into().unwrap();
         let (n, f) = (&i[12..15], &i[15..18]);
         let fa = spatial::mat3_vec(e, &[f[0], f[1], f[2]]);
         let na = spatial::mat3_vec(e, &[n[0], n[1], n[2]]);
@@ -163,9 +172,9 @@ impl CustomOp<f64> for PluckerForce {
             i.iter().copied().collect(),
         )
     }
-    fn backward(&self, r_in: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
-        let e: &[f64; 9] = (&r_in[0..9]).try_into().unwrap();
-        let r: &[f64; 3] = (&r_in[9..12]).try_into().unwrap();
+    fn backward(&self, r_in: &[S], go: &[S]) -> SmallVec<[S; 8]> {
+        let e: &[S; 9] = (&r_in[0..9]).try_into().unwrap();
+        let r: &[S; 3] = (&r_in[9..12]).try_into().unwrap();
         let (n, f) = (&r_in[12..15], &r_in[15..18]);
         let (ln, lf) = (&go[0..3], &go[3..6]);
         let et = spatial::mat3_t(e);
@@ -175,7 +184,7 @@ impl CustomOp<f64> for PluckerForce {
         let gf = spatial::mat3_vec(&et, &arg);
         let fa = spatial::mat3_vec(e, &[f[0], f[1], f[2]]);
         let gr = spatial::cross(&fa, &[ln[0], ln[1], ln[2]]);
-        let mut ge = [0.0; 9];
+        let mut ge = [S::zero(); 9];
         for i in 0..3 {
             for j in 0..3 {
                 ge[i * 3 + j] = ln[i] * n[j] + lf[i] * f[j] - rxln[i] * f[j];
@@ -198,17 +207,17 @@ impl CustomOp<f64> for PluckerForce {
 #[derive(Clone, Copy)]
 pub struct InertiaApply;
 
-impl CustomOp<f64> for InertiaApply {
+impl<S: Scalar> CustomOp<S> for InertiaApply {
     fn num_inputs(&self) -> usize {
         16
     }
     fn num_outputs(&self) -> usize {
         6
     }
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
         let ib = sym3::unpack(&[i[0], i[1], i[2], i[3], i[4], i[5]]);
         let m = i[6];
-        let c: &[f64; 3] = (&i[7..10]).try_into().unwrap();
+        let c: &[S; 3] = (&i[7..10]).try_into().unwrap();
         let (w, u) = (&i[10..13], &i[13..16]);
         let iw = spatial::mat3_vec(&ib, &[w[0], w[1], w[2]]);
         let ccw = spatial::cross(c, &spatial::cross(c, &[w[0], w[1], w[2]]));
@@ -226,14 +235,14 @@ impl CustomOp<f64> for InertiaApply {
             i.iter().copied().collect(),
         )
     }
-    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
+    fn backward(&self, r: &[S], go: &[S]) -> SmallVec<[S; 8]> {
         let ib = sym3::unpack(&[r[0], r[1], r[2], r[3], r[4], r[5]]);
         let m = r[6];
-        let c: &[f64; 3] = (&r[7..10]).try_into().unwrap();
+        let c: &[S; 3] = (&r[7..10]).try_into().unwrap();
         let (w, u) = (&r[10..13], &r[13..16]);
         let (ln, lf) = (&go[0..3], &go[3..6]);
-        let cr = |x: &[f64; 3], y: &[f64; 3]| spatial::cross(x, y);
-        let dot = |x: &[f64], y: &[f64]| x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+        let cr = |x: &[S; 3], y: &[S; 3]| spatial::cross(x, y);
+        let dot = |x: &[S], y: &[S]| x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
 
         // g_ω = Īλn − m c×(c×λn) + m c×λf
         let iln = spatial::mat3_vec(&ib, &[ln[0], ln[1], ln[2]]);
@@ -265,16 +274,16 @@ impl CustomOp<f64> for InertiaApply {
         let gm = dot(ln, &[cu[0] - ccw[0], cu[1] - ccw[1], cu[2] - ccw[2]])
             + dot(lf, &[u[0] + wxc[0], u[1] + wxc[1], u[2] + wxc[2]]);
         // g_c = −m[(c·ω)λn + (λn·c)ω − 2(λn·ω)c] + m(u×λn) + m(λf×ω)
-        let _lnd = dot(ln, w);
         let cdw = dot(c, w);
         let lnc = dot(ln, c);
         let lnw = dot(ln, w);
         let uxln = cr(&[u[0], u[1], u[2]], &[ln[0], ln[1], ln[2]]);
         let lfxw = cr(&[lf[0], lf[1], lf[2]], &[w[0], w[1], w[2]]);
+        let two = S::one() + S::one();
         let gc = [
-            -m * (cdw * ln[0] + lnc * w[0] - 2.0 * lnw * c[0]) + m * (uxln[0] + lfxw[0]),
-            -m * (cdw * ln[1] + lnc * w[1] - 2.0 * lnw * c[1]) + m * (uxln[1] + lfxw[1]),
-            -m * (cdw * ln[2] + lnc * w[2] - 2.0 * lnw * c[2]) + m * (uxln[2] + lfxw[2]),
+            -m * (cdw * ln[0] + lnc * w[0] - two * lnw * c[0]) + m * (uxln[0] + lfxw[0]),
+            -m * (cdw * ln[1] + lnc * w[1] - two * lnw * c[1]) + m * (uxln[1] + lfxw[1]),
+            -m * (cdw * ln[2] + lnc * w[2] - two * lnw * c[2]) + m * (uxln[2] + lfxw[2]),
         ];
         smallvec![
             g_ixx, g_iyy, g_izz, g_ixy, g_ixz, g_iyz, gm, gc[0], gc[1], gc[2], gw[0], gw[1], gw[2],
@@ -295,16 +304,16 @@ impl CustomOp<f64> for InertiaApply {
 pub struct RotateInertia;
 
 #[inline]
-fn m6(a: &[f64], i: usize, j: usize) -> f64 {
+fn m6<S: Scalar>(a: &[S], i: usize, j: usize) -> S {
     a[i * 6 + j]
 }
 
 #[inline]
-fn m6_set(a: &mut [f64], i: usize, j: usize, v: f64) {
+fn m6_set<S: Scalar>(a: &mut [S], i: usize, j: usize, v: S) {
     a[i * 6 + j] = v;
 }
 
-fn put3(a: &mut [f64], r0: usize, c0: usize, b: &[f64; 9]) {
+fn put3<S: Scalar>(a: &mut [S], r0: usize, c0: usize, b: &[S; 9]) {
     for i in 0..3 {
         for j in 0..3 {
             a[(r0 + i) * 6 + c0 + j] = b[i * 3 + j];
@@ -312,8 +321,8 @@ fn put3(a: &mut [f64], r0: usize, c0: usize, b: &[f64; 9]) {
     }
 }
 
-fn get3(a: &[f64], r0: usize, c0: usize) -> [f64; 9] {
-    let mut b = [0.0; 9];
+fn get3<S: Scalar>(a: &[S], r0: usize, c0: usize) -> [S; 9] {
+    let mut b = [S::zero(); 9];
     for i in 0..3 {
         for j in 0..3 {
             b[i * 3 + j] = a[(r0 + i) * 6 + c0 + j];
@@ -323,23 +332,23 @@ fn get3(a: &[f64], r0: usize, c0: usize) -> [f64; 9] {
 }
 
 /// Y = X·M·Xᵀ（6×6）
-fn conj6(x: &[f64], m: &[f64]) -> [f64; 36] {
-    let mut tmp = [0.0; 36];
+fn conj6<S: Scalar>(x: &[S], m: &[S]) -> [S; 36] {
+    let mut tmp = [S::zero(); 36];
     for i in 0..6 {
         for j in 0..6 {
-            let mut acc = 0.0;
+            let mut acc = S::zero();
             for k in 0..6 {
-                acc += m6(x, i, k) * m6(m, k, j);
+                acc = acc + m6(x, i, k) * m6(m, k, j);
             }
             m6_set(&mut tmp, i, j, acc);
         }
     }
-    let mut y = [0.0; 36];
+    let mut y = [S::zero(); 36];
     for i in 0..6 {
         for j in 0..6 {
-            let mut acc = 0.0;
+            let mut acc = S::zero();
             for k in 0..6 {
-                acc += m6(&tmp, i, k) * m6(x, j, k);
+                acc = acc + m6(&tmp, i, k) * m6(x, j, k);
             }
             m6_set(&mut y, i, j, acc);
         }
@@ -347,39 +356,44 @@ fn conj6(x: &[f64], m: &[f64]) -> [f64; 36] {
     y
 }
 
-impl CustomOp<f64> for RotateInertia {
+fn diag3<S: Scalar>(m: S) -> [S; 9] {
+    let z = S::zero();
+    [m, z, z, z, m, z, z, z, m]
+}
+
+impl<S: Scalar> CustomOp<S> for RotateInertia {
     fn num_inputs(&self) -> usize {
         22
     }
     fn num_outputs(&self) -> usize {
         10
     }
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
         let ib = sym3::unpack(&[i[0], i[1], i[2], i[3], i[4], i[5]]);
         let m = i[6];
-        let c: &[f64; 3] = (&i[7..10]).try_into().unwrap();
-        let e: &[f64; 9] = (&i[10..19]).try_into().unwrap();
-        let rv: &[f64; 3] = (&i[19..22]).try_into().unwrap();
+        let c: &[S; 3] = (&i[7..10]).try_into().unwrap();
+        let e: &[S; 9] = (&i[10..19]).try_into().unwrap();
+        let rv: &[S; 3] = (&i[19..22]).try_into().unwrap();
 
         let cc = spatial::mat3_mul(&spatial::skew(c), &spatial::skew(c));
-        let mut a_blk = [0.0; 9];
+        let mut a_blk = [S::zero(); 9];
         for k in 0..9 {
             a_blk[k] = ib[k] - m * cc[k];
         }
-        let mut ib6 = [0.0; 36];
+        let mut ib6 = [S::zero(); 36];
         let mb = spatial::skew(c);
-        let mut b_blk = [0.0; 9];
-        let mut bl_blk = [0.0; 9];
+        let mut b_blk = [S::zero(); 9];
+        let mut bl_blk = [S::zero(); 9];
         for k in 0..9 {
             b_blk[k] = m * mb[k];
-            bl_blk[k] = -m * mb[k];
+            bl_blk[k] = -(m * mb[k]);
         }
         put3(&mut ib6, 0, 0, &a_blk);
         put3(&mut ib6, 0, 3, &b_blk);
         put3(&mut ib6, 3, 0, &bl_blk);
-        put3(&mut ib6, 3, 3, &[m, 0.0, 0.0, 0.0, m, 0.0, 0.0, 0.0, m]);
+        put3(&mut ib6, 3, 3, &diag3(m));
         let re = spatial::mat3_mul(&spatial::skew(rv), e);
-        let mut xs = [0.0; 36];
+        let mut xs = [S::zero(); 36];
         put3(&mut xs, 0, 0, e);
         put3(&mut xs, 0, 3, &re);
         put3(&mut xs, 3, 3, e);
@@ -400,7 +414,7 @@ impl CustomOp<f64> for RotateInertia {
         ]);
         let y_a = get3(&y, 0, 0);
         let caca = spatial::mat3_mul(&spatial::skew(&ca), &spatial::skew(&ca));
-        let mut ia = [0.0; 9];
+        let mut ia = [S::zero(); 9];
         for k in 0..9 {
             ia[k] = y_a[k] + m * caca[k];
         }
@@ -410,35 +424,36 @@ impl CustomOp<f64> for RotateInertia {
         out.extend(ca);
         (out, i.iter().copied().collect())
     }
-    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
+    fn backward(&self, r: &[S], go: &[S]) -> SmallVec<[S; 8]> {
         let ib = sym3::unpack(&[r[0], r[1], r[2], r[3], r[4], r[5]]);
         let m = r[6];
-        let c: &[f64; 3] = (&r[7..10]).try_into().unwrap();
-        let e: &[f64; 9] = (&r[10..19]).try_into().unwrap();
-        let rv: &[f64; 3] = (&r[19..22]).try_into().unwrap();
+        let c: &[S; 3] = (&r[7..10]).try_into().unwrap();
+        let e: &[S; 9] = (&r[10..19]).try_into().unwrap();
+        let rv: &[S; 3] = (&r[19..22]).try_into().unwrap();
         let lm = go[6];
-        let lca: &[f64; 3] = (&go[7..10]).try_into().unwrap();
+        let lca: &[S; 3] = (&go[7..10]).try_into().unwrap();
+        let two = S::one() + S::one();
 
         // ---- 前向量重建 ----
         let cc = spatial::mat3_mul(&spatial::skew(c), &spatial::skew(c));
-        let mut a_blk = [0.0; 9];
+        let mut a_blk = [S::zero(); 9];
         for k in 0..9 {
             a_blk[k] = ib[k] - m * cc[k];
         }
-        let mut ib6 = [0.0; 36];
+        let mut ib6 = [S::zero(); 36];
         let mb = spatial::skew(c);
-        let mut b_blk = [0.0; 9];
-        let mut bl_blk = [0.0; 9];
+        let mut b_blk = [S::zero(); 9];
+        let mut bl_blk = [S::zero(); 9];
         for k in 0..9 {
             b_blk[k] = m * mb[k];
-            bl_blk[k] = -m * mb[k];
+            bl_blk[k] = -(m * mb[k]);
         }
         put3(&mut ib6, 0, 0, &a_blk);
         put3(&mut ib6, 0, 3, &b_blk);
         put3(&mut ib6, 3, 0, &bl_blk);
-        put3(&mut ib6, 3, 3, &[m, 0.0, 0.0, 0.0, m, 0.0, 0.0, 0.0, m]);
+        put3(&mut ib6, 3, 3, &diag3(m));
         let re = spatial::mat3_mul(&spatial::skew(rv), e);
-        let mut xs = [0.0; 36];
+        let mut xs = [S::zero(); 36];
         put3(&mut xs, 0, 0, e);
         put3(&mut xs, 0, 3, &re);
         put3(&mut xs, 3, 3, e);
@@ -460,11 +475,12 @@ impl CustomOp<f64> for RotateInertia {
         // forward 读取：pack(Ī_A) 只读 Y_A 上三角 [00,11,22,01,02,12]；
         // c_A = vee(Y_tr/m) 读 Y[1][5]、Y[0][5]、Y[0][4]；m 读 Y[5][5]。
         // caca 上三角：[c0²−|c|², c1²−|c|², c2²−|c|², c0c1, c0c2, c1c2]
-        let mut ly = [0.0; 36]; // λY
+        let mut ly = [S::zero(); 36]; // λY
+        let cabsq = ca[0] * ca[0] + ca[1] * ca[1] + ca[2] * ca[2];
         let caca_up = [
-            ca[0] * ca[0] - (ca[0] * ca[0] + ca[1] * ca[1] + ca[2] * ca[2]),
-            ca[1] * ca[1] - (ca[0] * ca[0] + ca[1] * ca[1] + ca[2] * ca[2]),
-            ca[2] * ca[2] - (ca[0] * ca[0] + ca[1] * ca[1] + ca[2] * ca[2]),
+            ca[0] * ca[0] - cabsq,
+            ca[1] * ca[1] - cabsq,
+            ca[2] * ca[2] - cabsq,
             ca[0] * ca[1],
             ca[0] * ca[2],
             ca[1] * ca[2],
@@ -474,48 +490,48 @@ impl CustomOp<f64> for RotateInertia {
         // 直接输出 out[6] = 输入 m 的 lm 也在种子中计入。
         // 注意提取段不读 Y[5][5]，λY[5][5] 保持 0——若把 lm 放入 λY[5][5]，
         // 共轭段会产生虚假的 ∂Y55/∂E 依赖（Y55 = m 与 E 无关）。
-        let mut g_ca = [0.0; 3];
+        let mut g_ca = [S::zero(); 3];
         for i in 0..3 {
-            g_ca[i] += lca[i];
+            g_ca[i] = g_ca[i] + lca[i];
         }
         let mut gm = lm;
         for k in 0..6 {
             // ∂pack_k(ia)/∂c_A · go[k]
             let d0 = match k {
-                0 => 0.0,
-                1 => -2.0 * ca[0],
-                2 => -2.0 * ca[0],
+                0 => S::zero(),
+                1 => -(two * ca[0]),
+                2 => -(two * ca[0]),
                 3 => ca[1],
                 4 => ca[2],
-                _ => 0.0,
+                _ => S::zero(),
             };
             let d1 = match k {
-                0 => -2.0 * ca[1],
-                1 => 0.0,
-                2 => -2.0 * ca[1],
+                0 => -(two * ca[1]),
+                1 => S::zero(),
+                2 => -(two * ca[1]),
                 3 => ca[0],
-                4 => 0.0,
+                4 => S::zero(),
                 _ => ca[2],
             };
             let d2 = match k {
-                0 => -2.0 * ca[2],
-                1 => -2.0 * ca[2],
-                2 => 0.0,
-                3 => 0.0,
+                0 => -(two * ca[2]),
+                1 => -(two * ca[2]),
+                2 => S::zero(),
+                3 => S::zero(),
                 4 => ca[0],
                 _ => ca[1],
             };
-            g_ca[0] += m * go[k] * d0;
-            g_ca[1] += m * go[k] * d1;
-            g_ca[2] += m * go[k] * d2;
+            g_ca[0] = g_ca[0] + m * go[k] * d0;
+            g_ca[1] = g_ca[1] + m * go[k] * d1;
+            g_ca[2] = g_ca[2] + m * go[k] * d2;
             // ∂pack_k(ia)/∂m = caca_up[k]
-            gm += go[k] * caca_up[k];
+            gm = gm + go[k] * caca_up[k];
         }
         // c_A = vee(Y_tr/m)：λY 位置 [1][5]、[0][5]、[0][4]，系数用总 g_ca
-        m6_set(&mut ly, 1, 5, -g_ca[0] / m);
+        m6_set(&mut ly, 1, 5, -(g_ca[0] / m));
         m6_set(&mut ly, 0, 5, g_ca[1] / m);
-        m6_set(&mut ly, 0, 4, -g_ca[2] / m);
-        gm -= (g_ca[0] * ca[0] + g_ca[1] * ca[1] + g_ca[2] * ca[2]) / m;
+        m6_set(&mut ly, 0, 4, -(g_ca[2] / m));
+        gm = gm - (g_ca[0] * ca[0] + g_ca[1] * ca[1] + g_ca[2] * ca[2]) / m;
         // Y_A 上三角（pack 读取位置）
         m6_set(&mut ly, 0, 0, go[0]);
         m6_set(&mut ly, 1, 1, go[1]);
@@ -536,43 +552,43 @@ impl CustomOp<f64> for RotateInertia {
             }
         }
         // xib = X*·I_B
-        let mut xib = [0.0; 36];
+        let mut xib = [S::zero(); 36];
         for i in 0..6 {
             for j in 0..6 {
-                let mut acc = 0.0;
+                let mut acc = S::zero();
                 for k in 0..6 {
-                    acc += m6(&xs, i, k) * m6(&ib6, k, j);
+                    acc = acc + m6(&xs, i, k) * m6(&ib6, k, j);
                 }
                 m6_set(&mut xib, i, j, acc);
             }
         }
-        let mut gx = [0.0; 36];
+        let mut gx = [S::zero(); 36];
         for i in 0..6 {
             for j in 0..6 {
-                let mut acc = 0.0;
+                let mut acc = S::zero();
                 for k in 0..6 {
-                    acc += m6(&lys, i, k) * m6(&xib, k, j);
+                    acc = acc + m6(&lys, i, k) * m6(&xib, k, j);
                 }
                 m6_set(&mut gx, i, j, acc);
             }
         }
         // g_I_B = X*ᵀ·λY·X*
-        let mut t1 = [0.0; 36];
+        let mut t1 = [S::zero(); 36];
         for i in 0..6 {
             for j in 0..6 {
-                let mut acc = 0.0;
+                let mut acc = S::zero();
                 for k in 0..6 {
-                    acc += m6(&xs, k, i) * m6(&ly, k, j);
+                    acc = acc + m6(&xs, k, i) * m6(&ly, k, j);
                 }
                 m6_set(&mut t1, i, j, acc);
             }
         }
-        let mut g6 = [0.0; 36];
+        let mut g6 = [S::zero(); 36];
         for i in 0..6 {
             for j in 0..6 {
-                let mut acc = 0.0;
+                let mut acc = S::zero();
                 for k in 0..6 {
-                    acc += m6(&t1, i, k) * m6(&xs, k, j);
+                    acc = acc + m6(&t1, i, k) * m6(&xs, k, j);
                 }
                 m6_set(&mut g6, i, j, acc);
             }
@@ -602,7 +618,7 @@ impl CustomOp<f64> for RotateInertia {
         // 对 E：∂⟨G, [r]×E⟩/∂E_kj = Σ_i G_ij [r]×_ik = ([r]×ᵀ·G)_kj
         let rx = spatial::skew(rv);
         let rxt_g = spatial::mat3_mul(&spatial::mat3_t(&rx), &gx_tr);
-        let mut ge = [0.0; 9];
+        let mut ge = [S::zero(); 9];
         for k in 0..9 {
             ge[k] = gx_tl[k] + gx_br[k] + rxt_g[k];
         }
@@ -616,13 +632,13 @@ impl CustomOp<f64> for RotateInertia {
             g_a[2] + g_a[6],
             g_a[5] + g_a[7],
         ];
-        let cgac: f64 = (0..3)
-            .map(|i| (0..3).map(|j| c[i] * g_a[i * 3 + j] * c[j]).sum::<f64>())
-            .sum();
+        let cgac: S = (0..3)
+            .map(|i| (0..3).map(|j| c[i] * g_a[i * 3 + j] * c[j]).fold(S::zero(), |a, v| a + v))
+            .fold(S::zero(), |a, v| a + v);
         let tr_ga = g_a[0] + g_a[4] + g_a[8];
         let c2 = c[0] * c[0] + c[1] * c[1] + c[2] * c[2];
-        gm += tr_ga * c2 - cgac;
-        let skew_coef = |mm: &[f64; 9]| -> [f64; 3] {
+        gm = gm + tr_ga * c2 - cgac;
+        let skew_coef = |mm: &[S; 9]| -> [S; 3] {
             let mt = spatial::mat3_t(mm);
             spatial::vee([
                 mm[0] - mt[0],
@@ -638,17 +654,17 @@ impl CustomOp<f64> for RotateInertia {
         };
         let wb = skew_coef(&g_b);
         let wbl = skew_coef(&g_bl);
-        gm += c[0] * wb[0] + c[1] * wb[1] + c[2] * wb[2];
-        gm -= c[0] * wbl[0] + c[1] * wbl[1] + c[2] * wbl[2];
+        gm = gm + (c[0] * wb[0] + c[1] * wb[1] + c[2] * wb[2]);
+        gm = gm - (c[0] * wbl[0] + c[1] * wbl[1] + c[2] * wbl[2]);
         // D = m·I：∂⟨g_D, m·I⟩/∂m = tr(g_D)
-        gm += g6[3 * 6 + 3] + g6[4 * 6 + 4] + g6[5 * 6 + 5];
-        let mut gc = [0.0; 3];
+        gm = gm + (g6[3 * 6 + 3] + g6[4 * 6 + 4] + g6[5 * 6 + 5]);
+        let mut gc = [S::zero(); 3];
         for i in 0..3 {
             // ∂(cᵀg_Ac)/∂c = (g_A + g_Aᵀ)c —— g_A 不对称（λY 非对称），不能省转置
             let gac = (g_a[i * 3] + g_a[i]) * c[0]
                 + (g_a[i * 3 + 1] + g_a[3 + i]) * c[1]
                 + (g_a[i * 3 + 2] + g_a[6 + i]) * c[2];
-            gc[i] = -m * (gac - 2.0 * tr_ga * c[i]) + m * (wb[i] - wbl[i]);
+            gc[i] = -(m * (gac - two * tr_ga * c[i])) + m * (wb[i] - wbl[i]);
         }
 
         smallvec![
@@ -666,36 +682,37 @@ impl CustomOp<f64> for RotateInertia {
 #[derive(Clone, Copy)]
 pub struct So3Exp;
 
-impl CustomOp<f64> for So3Exp {
+impl<S: Scalar> CustomOp<S> for So3Exp {
     fn num_inputs(&self) -> usize {
         3
     }
     fn num_outputs(&self) -> usize {
         9
     }
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
-        let w: &[f64; 3] = (&i[0..3]).try_into().unwrap();
+    fn forward(&self, i: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
+        let w: &[S; 3] = (&i[0..3]).try_into().unwrap();
         let r = spatial::so3_exp(w);
         (
             smallvec![r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]],
             smallvec![w[0], w[1], w[2]],
         )
     }
-    fn backward(&self, r_in: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
-        let w: &[f64; 3] = (&r_in[0..3]).try_into().unwrap();
-        let lam: &[f64; 9] = (&go[0..9]).try_into().unwrap();
+    fn backward(&self, r_in: &[S], go: &[S]) -> SmallVec<[S; 8]> {
+        let w: &[S; 3] = (&r_in[0..3]).try_into().unwrap();
+        let lam: &[S; 9] = (&go[0..9]).try_into().unwrap();
         let theta = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt();
-        if theta < 1e-5 {
+        if theta < c(1e-5) {
             // R ≈ I + [w]×：g_w = vee(λ − λᵀ)
-            let mut lmlt = [0.0; 9];
+            let mut lmlt = [S::zero(); 9];
+            let lt = spatial::mat3_t(lam);
             for k in 0..9 {
-                lmlt[k] = lam[k] - spatial::mat3_t(lam)[k];
+                lmlt[k] = lam[k] - lt[k];
             }
             let v = spatial::vee(lmlt);
             return smallvec![v[0], v[1], v[2]];
         }
         let u = [w[0] / theta, w[1] / theta, w[2] / theta];
-        let (s, c) = theta.sin_cos();
+        let (s, cth) = theta.sin_cos();
         let r_mat = spatial::so3_exp(w);
         // g_θ = ⟨λ, [u]×R⟩
         let g_theta = spatial::so3_grad_theta(&u, &r_mat, lam);
@@ -710,13 +727,14 @@ impl CustomOp<f64> for So3Exp {
             lam[1] * u[0] + lam[4] * u[1] + lam[7] * u[2],
             lam[2] * u[0] + lam[5] * u[1] + lam[8] * u[2],
         ];
-        let mut lmlt = [0.0; 9];
+        let mut lmlt = [S::zero(); 9];
         let lt = spatial::mat3_t(lam);
         for k in 0..9 {
             lmlt[k] = lam[k] - lt[k];
         }
         let vs = spatial::vee(lmlt);
-        let one_m_c = 1.0 - c;
+        let one = S::one();
+        let one_m_c = one - cth;
         let gu = [
             one_m_c * (lu[0] + ltu[0]) + s * vs[0],
             one_m_c * (lu[1] + ltu[1]) + s * vs[1],
@@ -724,7 +742,7 @@ impl CustomOp<f64> for So3Exp {
         ];
         // g_w = g_θ·u + (I − uuᵀ)·g_u/θ
         let ugu = u[0] * gu[0] + u[1] * gu[1] + u[2] * gu[2];
-        let mut gw = [0.0; 3];
+        let mut gw = [S::zero(); 3];
         for i in 0..3 {
             gw[i] = g_theta * u[i] + (gu[i] - u[i] * ugu) / theta;
         }
@@ -734,7 +752,3 @@ impl CustomOp<f64> for So3Exp {
         "so3_exp"
     }
 }
-
-// 保持 Scalar 在约束说明中被引用
-#[allow(unused)]
-fn _s<S: Scalar>() {}

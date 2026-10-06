@@ -8,6 +8,7 @@
 //! f32 AD 全栈（Context + call_custom + backward）通路。
 
 use ad_core::{Context, CustomOp, AD};
+use std::rc::Rc;
 use ad_physics::{DoublePendulumStep, GyroscopicStep};
 
 const TOL: f64 = 1e-4;
@@ -228,4 +229,84 @@ fn f32_friction_cone_property() {
             0.6 * fn_
         );
     }
+}
+
+
+// ============================================================ 空间代数 f32（§12.3 第 41 条）
+
+/// 6 个空间代数算子在 f32 下过泛型验证器（旋转矩阵输入用合法点集）
+#[test]
+fn validator_directly_validates_f32_spatial_ops() {
+    use ad_physics::{
+        InertiaApply, PluckerForce, PluckerMotion, RotateInertia, So3Exp, SpatialCrossMotion,
+    };
+    let mut rng = ad_verify::Rng::new(23);
+    let mut pts = |n: usize| -> Vec<Vec<f32>> {
+        (0..2)
+            .map(|_| (0..n).map(|_| 0.5f32 + rng.next_f64() as f32).collect())
+            .collect()
+    };
+    // So3Exp：3 输入可直接随机点
+    let report =
+        ad_verify::op_check::validate_custom_op(Rc::new(So3Exp) as Rc<dyn CustomOp<f32>>, &pts(3), 1e-3, 5e-3);
+    assert!(report.passed, "so3_exp f32:\n{report}");
+    // SpatialCrossMotion：12 输入无结构约束
+    let report = ad_verify::op_check::validate_custom_op(
+        Rc::new(SpatialCrossMotion) as Rc<dyn CustomOp<f32>>,
+        &pts(12),
+        1e-3,
+        5e-3,
+    );
+    assert!(report.passed, "spatial_cross_motion f32:\n{report}");
+    // 旋转矩阵输入的算子：构造正交 E（so3_exp f64 → cast f32）
+    let e64 = ad_physics::spatial::so3_exp(&[0.3f64, -0.8, 0.5]);
+    let e: Vec<f32> = e64.iter().map(|&v| v as f32).collect();
+
+    // PluckerMotion：[E(9), r(3), v_B(6)]
+    let mut motion_pt = e.clone();
+    motion_pt.extend([0.5f32, -0.25, 0.75]);
+    motion_pt.extend([0.5, -0.25, 0.75, 0.25, -0.5, 1.0]);
+    let report = ad_verify::op_check::validate_custom_op(
+        Rc::new(PluckerMotion) as Rc<dyn CustomOp<f32>>,
+        &[motion_pt],
+        1e-3,
+        5e-3,
+    );
+    assert!(report.passed, "plucker_motion f32:\n{report}");
+
+    // PluckerForce：[E(9), r(3), f_B(6)]
+    let mut force_pt = e.clone();
+    force_pt.extend([0.25f32, -0.5, 0.75]);
+    force_pt.extend([0.5, -0.25, 0.75, 0.25, -0.5, 1.0]);
+    let report = ad_verify::op_check::validate_custom_op(
+        Rc::new(PluckerForce) as Rc<dyn CustomOp<f32>>,
+        &[force_pt],
+        1e-3,
+        5e-3,
+    );
+    assert!(report.passed, "plucker_force f32:\n{report}");
+
+    // InertiaApply（16 输入，正定惯量）
+    let inertia_pts = vec![vec![
+        2.0f32, 3.0, 1.5, 0.1, -0.2, 0.15, 1.2, 0.3, -0.2, 0.5, 0.8, -0.4, 1.1, 0.2, -0.6, -0.3,
+    ]];
+    let report = ad_verify::op_check::validate_custom_op(
+        Rc::new(InertiaApply) as Rc<dyn CustomOp<f32>>,
+        &inertia_pts,
+        1e-3,
+        5e-3,
+    );
+    assert!(report.passed, "inertia_apply f32:\n{report}");
+
+    // RotateInertia（22 输入）：[Ī_B(6), m, c(3), E(9), r(3)]
+    let mut ri_pt = vec![2.0f32, 3.0, 1.5, 0.1, -0.2, 0.15, 1.2, 0.3, -0.2, 0.5];
+    ri_pt.extend(e);
+    ri_pt.extend([0.4f32, -0.3, 0.9]);
+    let report = ad_verify::op_check::validate_custom_op(
+        Rc::new(RotateInertia) as Rc<dyn CustomOp<f32>>,
+        &[ri_pt],
+        1e-3,
+        5e-3,
+    );
+    assert!(report.passed, "rotate_inertia f32:\n{report}");
 }

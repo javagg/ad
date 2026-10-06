@@ -38,6 +38,11 @@ pub struct Context<S: Scalar> {
     anomaly_reported: bool,
     /// detect_anomaly 开启时记录的节点前向值（异常定位用，设计文档 §4.2.5）
     forward_values: Vec<S>,
+    /// 自定义算子注册表（§12.3 第 42 条）：tape 记录存 `op_id` 而非 `Rc`，
+    /// 同一算子的重复调用零引用计数开销；生命周期由 Context 持有。
+    op_registry: Vec<Rc<dyn CustomOp<S>>>,
+    /// `Rc::as_ptr` → 注册表槽位（去重：同一算子多次调用共享同一 id）
+    op_ids: HashMap<usize, u32>,
 }
 
 impl<S: Scalar> Default for Context<S> {
@@ -60,6 +65,8 @@ impl<S: Scalar> Context<S> {
             detect_anomaly: false,
             anomaly_reported: false,
             forward_values: Vec::new(),
+            op_registry: Vec::new(),
+            op_ids: HashMap::new(),
         }
     }
 
@@ -162,6 +169,11 @@ impl<S: Scalar> Context<S> {
         self.adjoints.clear();
         self.forward_values.clear();
         self.anomaly_reported = false;
+        // 记录已全部丢弃 → op_id 引用清零，注册表可安全重置（否则
+        // "每循环 Rc::new + call_custom" 的模式会累积注册项——容量保留，
+        // 复用循环零重分配）
+        self.op_registry.clear();
+        self.op_ids.clear();
         self.next_node = self.leaves.iter().map(|n| n.index() + 1).max().unwrap_or(0);
     }
 
@@ -199,6 +211,7 @@ impl<S: Scalar> Context<S> {
             anomaly_reported,
             forward_values,
             next_node,
+            op_registry,
             ..
         } = self;
 
@@ -250,11 +263,13 @@ impl<S: Scalar> Context<S> {
                 }
                 OpRecord::Custom {
                     name,
-                    op,
+                    op_id,
                     inputs,
                     output_base,
                     residual,
                 } => {
+                    // 算子经注册表查找（记录只存 id，§12.3 第 42 条）
+                    let op = &*op_registry[*op_id as usize];
                     // 输出节点连续（NodeId 单调分配）：输出伴随是 adjoints 的
                     // 连续切片，直接以切片形式传入 VJP（无收集拷贝）
                     let n_out = op.num_outputs();
@@ -277,7 +292,7 @@ impl<S: Scalar> Context<S> {
                     // 常量在尾部时 zip 恰好对齐（潜伏 bug，matvec 部分追踪
                     // 形态首踩：M 常量在前、v 在后，zip 错把 λM 路由给 λv）
                     for &(slot, inode) in inputs.iter() {
-                        let g = gins[slot];
+                        let g = gins[slot as usize];
                         let t = adjoints[inode.index()] + g;
                         if *detect_anomaly && !t.is_finite() && !*anomaly_reported {
                             *anomaly_reported = true;
@@ -467,6 +482,15 @@ impl<S: Scalar> Context<S> {
         if self.no_grad_depth > 0 || inputs.iter().all(|x| x.node.is_none()) {
             return outs.iter().map(|&v| AD::constant(v)).collect();
         }
+        // 算子注册：同一 Rc（指针相等）复用同一 id——重复调用零引用计数
+        let op_id = if let Some(&id) = self.op_ids.get(&(Rc::as_ptr(&op) as *const u8 as usize)) {
+            id
+        } else {
+            let id = self.op_registry.len() as u32;
+            self.op_registry.push(Rc::clone(&op));
+            self.op_ids.insert(Rc::as_ptr(&op) as *const u8 as usize, id);
+            id
+        };
         // 输出节点连续分配：记录 base，返回值直接用本地计数重建 id
         if outs.is_empty() {
             return SmallVec::new();
@@ -475,14 +499,14 @@ impl<S: Scalar> Context<S> {
         for &v in &outs[1..] {
             self.alloc_node(v);
         }
-        let tracked: SmallVec<[(usize, NodeId); 8]> = inputs
+        let tracked: SmallVec<[(u32, NodeId); 8]> = inputs
             .iter()
             .enumerate()
-            .filter_map(|(slot, x)| x.node.map(|n| (slot, n)))
+            .filter_map(|(slot, x)| x.node.map(|n| (slot as u32, n)))
             .collect();
         self.tape.push(OpRecord::Custom {
             name,
-            op,
+            op_id,
             inputs: tracked,
             output_base,
             residual,
