@@ -139,7 +139,7 @@ fn ift_solver_value_matches_direct_computation() {
     let mut ctx = Context::<f64>::new();
     let (theta, vt) = ctx.var(theta_val);
     let out = ctx.call_custom(
-        ImplicitSolve::with_cfg(Cubic, ad_custom::ImplicitSolveCfg { max_iters: 32 }),
+        ImplicitSolve::with_cfg(Cubic, ad_custom::ImplicitSolveCfg { max_iters: 32, ..Default::default() }),
         &[theta],
     );
     // 解 x*：x³ + x = θ

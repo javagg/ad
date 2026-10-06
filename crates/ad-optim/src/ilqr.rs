@@ -33,6 +33,12 @@ pub struct IlqrCfg {
     /// 期望下降的最低验收比例
     pub accept_ratio: f64,
     pub tol: f64,
+    /// 控制下界（box 约束，None = 无界）。前向 pass 钳制 u_new——backward
+    /// pass 不感知边界（clamped iLQR 启发式）：主动约束期 ΔV 预估偏乐观，
+    /// 由 α 回溯的验收环节兜底（设计文档 §12.3 第 30 条）。
+    pub u_min: Option<Vec<f64>>,
+    /// 控制上界（与 u_min 等长）
+    pub u_max: Option<Vec<f64>>,
 }
 
 impl Default for IlqrCfg {
@@ -45,6 +51,8 @@ impl Default for IlqrCfg {
             alpha_shrink: 0.5,
             accept_ratio: 0.0,
             tol: 1e-6,
+            u_min: None,
+            u_max: None,
         }
     }
 }
@@ -353,6 +361,17 @@ pub fn solve_ilqr<D: Dynamics>(
                     let dx: Vec<f64> = (0..nx).map(|j| x_new[t][j] - x[t][j]).collect();
                     let k_term: f64 = (0..nx).map(|j| kmat[t][i][j] * dx[j]).sum::<f64>();
                     u_new[t][i] += alpha * ks[t][i] + k_term;
+                    // box 约束：前向钳制（clamped iLQR——backward pass 不感知边界）
+                    if let Some(lo) = &cfg.u_min {
+                        if u_new[t][i] < lo[i] {
+                            u_new[t][i] = lo[i];
+                        }
+                    }
+                    if let Some(hi) = &cfg.u_max {
+                        if u_new[t][i] > hi[i] {
+                            u_new[t][i] = hi[i];
+                        }
+                    }
                 }
                 ctx_fwd.clear_tape();
                 xv.clear();

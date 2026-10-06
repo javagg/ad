@@ -30,6 +30,7 @@ ad-optim = { path = "crates/ad-optim" }
 num-traits = "0.2"
 smallvec = "1"
 num-complex = "0.4"
+rayon = "1"
 proptest = "1"
 
 [profile.release]

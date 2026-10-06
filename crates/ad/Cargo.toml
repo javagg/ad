@@ -12,10 +12,19 @@ ad-ops = { workspace = true }
 ad-custom = { workspace = true }
 ad-checkpoint = { workspace = true }
 ad-verify = { workspace = true }
+rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
 smallvec = { workspace = true }
 criterion = "0.5"
+
+[features]
+# 批量 rollout 并行示例（§4.1.6）：仅示例依赖 rayon，库本体零新增依赖
+rayon = ["dep:rayon"]
+
+[[example]]
+name = "batch_rollout"
+required-features = ["rayon"]
 
 [[bench]]
 name = "ad_bench"

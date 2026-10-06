@@ -13,6 +13,7 @@ dependencies = [
  "ad-physics",
  "ad-verify",
  "criterion",
+ "rayon",
  "smallvec",
 ]
 
@@ -40,6 +41,7 @@ name = "ad-custom"
 version = "0.1.0"
 dependencies = [
  "ad-core",
+ "ad-ops",
  "ad-verify",
  "num-traits",
  "smallvec",
