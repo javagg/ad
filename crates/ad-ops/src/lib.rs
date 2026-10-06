@@ -371,6 +371,27 @@ pub fn matvec_with<S: Scalar>(ctx: &mut Context<S>, m: &[AD<S>], v: &[AD<S>]) ->
         .to_vec()
 }
 
+/// 解对称线性系统 `M·x = b`（O(n³) bulk，设计文档 §4.3.4 "Cholesky/线性求解
+/// → bulk CustomOp" 行的落地）：1 条 tape 记录，而非 n² 条逐元素记录。
+/// `m` 为行主序 n×n（**对称**，仅读取上三角也无妨——梯度按全矩阵路由），
+/// `b` 长度 n。前向部分主元 LU；反向 VJP：
+/// `z = M⁻¹λx`（再解一次）、`λb = z`、`λM_ij = −z_i·x_j`（槽位独立路由，
+/// M 的对称性属于值域而非槽位结构——上游共享子表达式由 AD 自然累加）。
+/// 残差保存 [M(n²), x(n)]（反向需 M 复解与 x 做 λM 积）。
+pub fn solve_sym_with<S: Scalar>(ctx: &mut Context<S>, m: &[AD<S>], b: &[AD<S>]) -> Vec<AD<S>> {
+    let n = b.len();
+    assert_eq!(
+        m.len(),
+        n * n,
+        "solve_sym: matrix length {} != n² for b length {n}",
+        m.len()
+    );
+    let mut inputs = Vec::with_capacity(m.len() + n);
+    inputs.extend_from_slice(m);
+    inputs.extend_from_slice(b);
+    ctx.call_custom(SolveSymOp { n }, &inputs).to_vec()
+}
+
 /// `dot(a, b)`：线程局部版本
 pub fn dot<S: Scalar>(a: &[AD<S>], b: &[AD<S>]) -> AD<S> {
     ad_core::with_context(|c: &mut Context<S>| dot_with(c, a, b))
@@ -552,4 +573,106 @@ impl<S: Scalar> CustomOp<S> for MatVecOp {
     fn name(&self) -> &'static str {
         "matvec"
     }
+}
+
+/// solve_sym：inputs = [M (n² 行主序)..., b...]，residual = [M..., x...]
+/// （x 为前向解，反向 λM 需要它）。前向部分主元 LU；反向两次复解：
+/// z = M⁻¹λx → λb = z、λM_ij = −z_i·x_j（VJP 推导见 `solve_sym_with`）。
+/// 零主元返回零解——病态矩阵应先用 `ad_verify::condition_number_inf`
+/// 检查（§4.3.3）。
+pub struct SolveSymOp {
+    pub n: usize,
+}
+
+impl<S: Scalar> CustomOp<S> for SolveSymOp {
+    fn num_inputs(&self) -> usize {
+        self.n * self.n + self.n
+    }
+    fn num_outputs(&self) -> usize {
+        self.n
+    }
+    fn forward(&self, inputs: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
+        let n = self.n;
+        let (m, b) = (&inputs[..n * n], &inputs[n * n..]);
+        let x = lu_solve_slice(m, b, n);
+        let mut residual = SmallVec::new();
+        residual.extend_from_slice(m);
+        residual.extend_from_slice(&x);
+        (x.iter().copied().collect(), residual)
+    }
+    fn backward(&self, r: &[S], go: &[S]) -> SmallVec<[S; 8]> {
+        let n = self.n;
+        let m = &r[..n * n];
+        let x = &r[n * n..];
+        // z = M⁻¹·λx（对称：M⁻ᵀ = M⁻¹）
+        let z = lu_solve_slice(m, go, n);
+        let mut grads = SmallVec::new();
+        // λM（行主序全矩阵路由——槽位独立，对称性由上游共享子表达式累加）
+        for i in 0..n {
+            for j in 0..n {
+                grads.push(-(z[i] * x[j]));
+            }
+        }
+        // λb = z
+        grads.extend_from_slice(&z);
+        grads
+    }
+    fn name(&self) -> &'static str {
+        "solve_sym"
+    }
+}
+
+#[inline]
+fn singular_eps<S: Scalar>() -> S {
+    num_traits::cast(1e-12).unwrap_or_else(S::zero)
+}
+
+/// 行主序 n×n 部分主元 LU 求解（就地小工具；奇异主元 → 零解）。
+fn lu_solve_slice<S: Scalar>(m: &[S], b: &[S], n: usize) -> Vec<S> {
+    let eps = singular_eps::<S>();
+    let mut a = m.to_vec();
+    let mut y = b.to_vec();
+    for col in 0..n {
+        let mut piv = col;
+        let mut best = a[col * n + col];
+        if best < S::zero() {
+            best = -best;
+        }
+        for r in col + 1..n {
+            let v = a[r * n + col];
+            let av = if v < S::zero() { -v } else { v };
+            if av > best {
+                best = av;
+                piv = r;
+            }
+        }
+        if piv != col {
+            for c in 0..n {
+                a.swap(col * n + c, piv * n + c);
+            }
+            y.swap(col, piv);
+        }
+        let d = a[col * n + col];
+        if d.abs() < eps {
+            return vec![S::zero(); n];
+        }
+        for r in col + 1..n {
+            let f = a[r * n + col] / d;
+            if f != S::zero() {
+                for cc in col..n {
+                    a[r * n + cc] = a[r * n + cc] - f * a[col * n + cc];
+                }
+                y[r] = y[r] - f * y[col];
+            }
+        }
+    }
+    let mut x = vec![S::zero(); n];
+    for i in (0..n).rev() {
+        let mut s = y[i];
+        for cc in i + 1..n {
+            s = s - a[i * n + cc] * x[cc];
+        }
+        x[i] = s / a[i * n + i];
+    }
+    x
 }

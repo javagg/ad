@@ -227,3 +227,60 @@ fn matvec_constant_matrix_still_tracks_vector() {
     assert!((ctx.grad(vv[0]).unwrap() - 4.0).abs() < 1e-12);
     assert!((ctx.grad(vv[1]).unwrap() - 6.0).abs() < 1e-12);
 }
+
+
+// ============================================================ solve_sym（§4.3.4 线性求解行）
+
+use ad_core::CustomOp;
+use ad_ops::solve_sym_with;
+
+/// 已知系统 + 解析梯度：M=[[4,1],[1,3]]，b=[9,10]
+#[test]
+fn solve_sym_forward_and_analytic_grads() {
+    let m = vec![4.0, 1.0, 1.0, 3.0];
+    let b = vec![9.0, 10.0];
+    let mut ctx = Context::<f64>::new();
+    let (ad_m, vm) = vec_vars(&mut ctx, &m);
+    let (ad_b, vb) = vec_vars(&mut ctx, &b);
+    let x = solve_sym_with(&mut ctx, &ad_m, &ad_b);
+    for i in 0..2 {
+        let r: f64 = (0..2).map(|j| m[i * 2 + j] * x[j].value).sum();
+        assert!((r - b[i]).abs() < 1e-12, "residual row {i}");
+    }
+    assert_eq!(ctx.tape_len(), 1, "solve_sym 应只占 1 条记录");
+
+    // loss = x[0]+x[1] → λb = M⁻¹λ、λM_ij = −z_i·x_j（z = M⁻¹λ）
+    let loss = ctx.add(x[0], x[1]);
+    ctx.backward(loss);
+    let det = 4.0 * 3.0 - 1.0;
+    let minv = [[3.0 / det, -1.0 / det], [-1.0 / det, 4.0 / det]];
+    for j in 0..2 {
+        let want: f64 = minv[0][j] + minv[1][j];
+        assert!((ctx.grad(vb[j]).unwrap() - want).abs() < 1e-12, "db[{j}]");
+    }
+    let z = [minv[0][0] + minv[1][0], minv[0][1] + minv[1][1]];
+    for (idx, (i, j)) in [(0usize, (0usize, 0usize)), (1, (0, 1)), (2, (1, 0)), (3, (1, 1))] {
+        let want = -(z[i] * x[j].value);
+        assert!((ctx.grad(vm[idx]).unwrap() - want).abs() < 1e-12, "dM[{i}][{j}]");
+    }
+}
+
+/// 泛型验证器直接对拍 solve_sym 的 VJP（f64 与 f32 双标量）
+#[test]
+fn solve_sym_passes_validator_both_scalars() {
+    use std::rc::Rc;
+
+    let pts64 = vec![vec![4.0, 1.0, 0.5, 1.0, 3.0, 0.2, 0.5, 0.2, 2.0, 1.0, 2.0, 3.0]];
+    let op64: Rc<dyn CustomOp<f64>> = Rc::new(ad_ops::SolveSymOp { n: 3 });
+    let report = ad_verify::op_check::validate_custom_op(op64, &pts64, 1e-6, 1e-5);
+    assert!(report.passed, "solve_sym f64:\n{report}");
+
+    let pts32: Vec<Vec<f32>> = pts64
+        .clone()
+        .into_iter()
+        .map(|p| p.into_iter().map(|v| v as f32).collect())
+        .collect();
+    let op32: Rc<dyn CustomOp<f32>> = Rc::new(ad_ops::SolveSymOp { n: 3 });
+    let report = ad_verify::op_check::validate_custom_op(op32, &pts32, 1e-3, 5e-3);
+    assert!(report.passed, "solve_sym f32:\n{report}");
+}

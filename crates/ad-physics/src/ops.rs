@@ -752,3 +752,61 @@ impl<S: Scalar> CustomOp<S> for So3Exp {
         "so3_exp"
     }
 }
+
+/// 空间力叉积（对偶于 [`SpatialCrossMotion`]）：`out = v ×* m`。
+/// v = [ω; v]、m = [n; f] → `out = (ω×n + v×f ; ω×f)`。
+/// RNEA 的陀螺项 `v ×* (I·v)` 由 [`InertiaApply`]（动量）与本算子组合。
+/// inputs = [v(6), m(6)]，outputs = [out(6)]。
+#[derive(Clone, Copy)]
+pub struct SpatialForceCross;
+
+impl<S: Scalar> CustomOp<S> for SpatialForceCross {
+    fn num_inputs(&self) -> usize {
+        12
+    }
+    fn num_outputs(&self) -> usize {
+        6
+    }
+    fn forward(&self, i: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
+        let (w, v) = (&i[0..3], &i[3..6]);
+        let (n, f) = (&i[6..9], &i[9..12]);
+        let wn = spatial::cross(&[w[0], w[1], w[2]], &[n[0], n[1], n[2]]);
+        let vf = spatial::cross(&[v[0], v[1], v[2]], &[f[0], f[1], f[2]]);
+        let wf = spatial::cross(&[w[0], w[1], w[2]], &[f[0], f[1], f[2]]);
+        (
+            smallvec![
+                wn[0] + vf[0],
+                wn[1] + vf[1],
+                wn[2] + vf[2],
+                wf[0],
+                wf[1],
+                wf[2]
+            ],
+            i.iter().copied().collect(),
+        )
+    }
+    // VJP（λ = [λn; λf]）：
+    //   d(out_n) = dω×n + ω×dn + dv×f + v×df；d(out_f) = dω×f + ω×df
+    //   → g_ω = n×λn + f×λf；g_v = f×λn；g_n = λn×ω；g_f = λn×v + λf×ω
+    fn backward(&self, r: &[S], go: &[S]) -> SmallVec<[S; 8]> {
+        let (w, v) = (&r[0..3], &r[3..6]);
+        let (n, f) = (&r[6..9], &r[9..12]);
+        let (ln, lf) = (&go[0..3], &go[3..6]);
+        let cr = |x: &[S], y: &[S]| spatial::cross(&[x[0], x[1], x[2]], &[y[0], y[1], y[2]]);
+        let nxln = cr(n, ln);
+        let fxlf = cr(f, lf);
+        let g_w = [nxln[0] + fxlf[0], nxln[1] + fxlf[1], nxln[2] + fxlf[2]];
+        let g_v = cr(f, ln);
+        let g_n = cr(ln, w);
+        let lnxv = cr(ln, v);
+        let lfxw = cr(lf, w);
+        let g_f = [lnxv[0] + lfxw[0], lnxv[1] + lfxw[1], lnxv[2] + lfxw[2]];
+        smallvec![
+            g_w[0], g_w[1], g_w[2], g_v[0], g_v[1], g_v[2], g_n[0], g_n[1], g_n[2], g_f[0],
+            g_f[1], g_f[2],
+        ]
+    }
+    fn name(&self) -> &'static str {
+        "spatial_force_cross"
+    }
+}

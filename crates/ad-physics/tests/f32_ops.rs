@@ -310,3 +310,20 @@ fn validator_directly_validates_f32_spatial_ops() {
     );
     assert!(report.passed, "rotate_inertia f32:\n{report}");
 }
+
+/// SpatialForceCross 在 f32 下过泛型验证器
+#[test]
+fn validator_directly_validates_f32_force_cross() {
+    use ad_physics::SpatialForceCross;
+    let mut rng = ad_verify::Rng::new(31);
+    let pts: Vec<Vec<f32>> = (0..2)
+        .map(|_| (0..12).map(|_| 0.5f32 + rng.next_f64() as f32).collect())
+        .collect();
+    let report = ad_verify::op_check::validate_custom_op(
+        Rc::new(SpatialForceCross) as Rc<dyn CustomOp<f32>>,
+        &pts,
+        1e-3,
+        5e-3,
+    );
+    assert!(report.passed, "spatial_force_cross f32:\n{report}");
+}

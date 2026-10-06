@@ -8,7 +8,7 @@ use ad_core::{Context, CustomOp, AD};
 use std::rc::Rc;
 
 use ad_physics::spatial;
-use ad_physics::{chain::DoublePendulumStep, ContactNormalOp, RegularizedFrictionOp, GyroscopicStep};
+use ad_physics::{chain::DoublePendulumStep, ContactNormalOp, RegularizedFrictionOp, GyroscopicStep, SpatialForceCross};
 use ad_physics::{
     InertiaApply, PluckerForce, PluckerMotion, RotateInertia, So3Exp, SpatialCrossMotion,
 };
@@ -221,6 +221,7 @@ fn validator_passes_all_library_ops() {
     expect_pass("inertia_apply", Rc::new(InertiaApply), &pts(16));
     expect_pass("so3_exp", Rc::new(So3Exp), &pts(3));
     expect_pass("gyroscopic_step", Rc::new(GyroscopicStep), &pts(7));
+    expect_pass("spatial_force_cross", Rc::new(SpatialForceCross), &pts(12));
     expect_pass("contact_normal", Rc::new(ContactNormalOp), &pts(6));
     expect_pass("regularized_friction", Rc::new(RegularizedFrictionOp), &pts(5));
     expect_pass(

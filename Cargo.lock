@@ -63,6 +63,7 @@ name = "ad-ops"
 version = "0.1.0"
 dependencies = [
  "ad-core",
+ "ad-verify",
  "num-complex",
  "num-traits",
  "smallvec",
@@ -83,6 +84,7 @@ name = "ad-physics"
 version = "0.1.0"
 dependencies = [
  "ad-core",
+ "ad-ops",
  "ad-optim",
  "ad-verify",
  "num-traits",
