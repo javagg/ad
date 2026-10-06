@@ -1,6 +1,6 @@
 # HANDOFF — 项目状态与新 Session 接入指南
 
-> 写于 2026-10-06，同日多次更新。最后一次全量验证：**47 套件全绿**、clippy 零
+> 写于 2026-10-06，同日多次更新。最后一次全量验证：**48 套件全绿**、clippy 零
 > 警告、wasm32 编译通过。本文档目标：新 session 零上下文即可继续推进，
 > 不丢任何关键决策/陷阱/路径。
 
@@ -45,6 +45,7 @@ ad-demo    Yew + trunk wasm32 web demo（三面板：标量/单摆checkpoint/IFT
 | （本次 2） | IFT 泛化（矩形残差/warm-start/欠定拒绝，第 29 条）、iLQR box 约束 + MPC 滚动（第 30 条）、f32 标定（第 31 条）、rayon 批量示例（第 32 条）；文档 v0.3.6 |
 | （本次 3） | 体系闭环（§12.3 第 33–36 条）：CustomOp 公开验证器、接触 IFT active-set 模式、健康度接入优化器（κ/μ/拒收计数 + GD 健康度画像）、CustomOp 随机图 fuzz；文档 v0.3.7 |
 | （本次 4） | 规模实证（scale_stress，4000 维 × 10⁴ 步 0.93 s / 37.9 MiB）+ 用户教程 docs/guide.md；文档 v0.3.8 |
+| （本次 5） | f32 物理算子泛型化（DoublePendulumStep + GyroscopicStep，f32/f64 对拍 + f32 能量守恒漂移 3.8e-3）；文档 v0.3.9 |
 | （本次） | 工具链与场景补全（§12.3 第 28 条）：条件数探针、matvec、**Custom 记录槽位路由潜伏 bug 修复**、记录瘦身（单摆 −59%/−63% 累计）、iLQR LU 多右端、10⁴ 步链场景、§5.4 验收 bench；文档 v0.3.5 |
 
 ## 4. 关键设计决策与陷阱（新 session 必读）
@@ -153,8 +154,8 @@ f32 标定（`f32.rs` + §5.1 表）、rayon 批量示例（`batch_rollout.rs`�
 4. ~~CustomOp 随机图 fuzz~~ ✅ 3 算子 × 24 步随机 DAG × 512 例 vs 双数 oracle，
    部分追踪形态 + 先规划后执行 + 值模拟缩放防对消（`fuzz_custom.rs`）。
 
-**仍开放的方向**：crates.io 发布（用户指示暂缓）；box-DDP（逐步 QP）；f32 物理
-算子泛型化；OpRecord arena（压 CustomOp 框架开销 2.4–3.0×）；
+**仍开放的方向**：crates.io 发布（用户指示暂缓）；box-DDP（逐步 QP）；接触、空间代数
+算子的 f32 泛型化（已有 2 个示范，第 38 条）+ op_check f32 版；OpRecord arena（压 CustomOp 框架开销 2.4–3.0×）；
 经典 Revolve / GradBench（研究性）。
 
 **第三轮（第 37 条，规模实证与采用通道）**：
@@ -184,7 +185,7 @@ cargo clippy --workspace --all-targets  # 零警告
 cargo check --workspace --target wasm32-unknown-unknown
 cargo run --release -p ad --example profile  # 分配画像 + 墙钟（--loop N 供 cdb 采样）
 cd crates/ad-demo && trunk serve  # web demo → localhost:8080
-git push                        # 推送（2026-10-06 已同步至 9d1e682+）
+git push                        # 推送
 ```
 
 ## 8. 文件路径速查

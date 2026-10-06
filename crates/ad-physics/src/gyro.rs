@@ -6,6 +6,11 @@
 //!
 //! VJP 闭式（对角惯量，推导见 `backward` 注释）：
 //! `∂a1/∂ω2 = I3ω3/I1`，`∂a1/∂ω3 = −I2ω2/I1`，`∂a1/∂ω1 = 0`，其余循环。
+//!
+//! 泛型实现（§12.3 第 38 条）：同一份 forward/手写 VJP 服务 f64 与 f32
+//! （`S: Scalar`，超越函数与常量经 `num_traits::Float`）。f64 路径的
+//! FD 隔离器 + 角动量守恒验证覆盖全部代码路径；f32 专属的求值点舍入
+//! 由 f32/f64 同点对拍测试单独验证。
 
 use ad_core::{CustomOp, Scalar};
 use smallvec::{smallvec, SmallVec};
@@ -16,7 +21,7 @@ use smallvec::{smallvec, SmallVec};
 pub struct GyroscopicStep;
 
 #[inline]
-fn accel(w: [f64; 3], i: [f64; 3]) -> [f64; 3] {
+fn accel<S: Scalar>(w: [S; 3], i: [S; 3]) -> [S; 3] {
     let l = [i[0] * w[0], i[1] * w[1], i[2] * w[2]];
     let x = [
         w[1] * l[2] - w[2] * l[1],
@@ -26,7 +31,7 @@ fn accel(w: [f64; 3], i: [f64; 3]) -> [f64; 3] {
     [x[0] / i[0], x[1] / i[1], x[2] / i[2]]
 }
 
-impl CustomOp<f64> for GyroscopicStep {
+impl<S: Scalar> CustomOp<S> for GyroscopicStep {
     fn num_inputs(&self) -> usize {
         7
     }
@@ -35,7 +40,7 @@ impl CustomOp<f64> for GyroscopicStep {
         3
     }
 
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
         let w = [i[0], i[1], i[2]];
         let ia = [i[3], i[4], i[5]];
         let dt = i[6];
@@ -53,7 +58,7 @@ impl CustomOp<f64> for GyroscopicStep {
     // - `∂a1/∂ω2 = I3ω3/I1`，`∂a1/∂ω3 = −I2ω2/I1`，`∂a1/∂ω1 = 0`（循环）
     // - `λω = λω' − dt·(∂a/∂ω)ᵀλω'`；`λdt = −Σλω'·a`；`λI = −dt·Σλω'·∂a/∂I`
     //   （I 的导数含 −a/I 自身项，双重负号相消，系数保持不变）
-    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
+    fn backward(&self, r: &[S], go: &[S]) -> SmallVec<[S; 8]> {
         let (w1, w2, w3) = (r[0], r[1], r[2]);
         let (i1, i2, i3) = (r[3], r[4], r[5]);
         let dt = r[6];
@@ -87,7 +92,3 @@ impl CustomOp<f64> for GyroscopicStep {
         "gyroscopic_step"
     }
 }
-
-// 保持 Scalar 在约束说明中被引用
-#[allow(unused)]
-fn _s<S: Scalar>() {}

@@ -50,25 +50,26 @@ impl Default for DoublePendulumStep {
 
 impl DoublePendulumStep {
     /// 常量组合（forward/backward 共用）：M 的常数块与重力幅度。
+    /// f64 结构字段按数值类型按需转换（f32 路径的舍入发生在求值点，
+    /// 与"同一代码、不同标量"的泛型策略一致——§12.3 第 38 条）。
     #[inline]
-    fn consts(&self) -> (f64, f64, f64, f64, f64) {
-        let DoublePendulumStep {
-            m1,
-            m2,
-            l1,
-            l2,
-            g,
-        } = *self;
-        let a11 = (m1 + m2) * l1 * l1 + m2 * l2 * l2; // m11 的 θ2 无关块
-        let b = m2 * l1 * l2; // 耦合幅度（m11 系数 2、m12 系数 1、h）
-        let c22 = m2 * l2 * l2; // m22（= m12 的 θ2 无关块）
-        let p = (m1 + m2) * g * l1; // 重力项 1 幅度（乘 sin θ1）
-        let q = m2 * g * l2; // 重力项 2 幅度（乘 sin(θ1+θ2)，进两个方程）
-        (a11, b, c22, p, q)
+    fn consts<S: Scalar>(&self) -> [S; 5] {
+        let DoublePendulumStep { m1, m2, l1, l2, g } = *self;
+        let s = |v: f64| -> S { num_traits::cast(v).expect("constant cast f64→S") };
+        [
+            s((m1 + m2) * l1 * l1 + m2 * l2 * l2), // a11：m11 的 θ2 无关块
+            s(m2 * l1 * l2),                       // b：耦合幅度
+            s(m2 * l2 * l2),                       // c22：m22（= m12 的 θ2 无关块）
+            s((m1 + m2) * g * l1),                 // p：重力项 1 幅度
+            s(m2 * g * l2),                        // q：重力项 2 幅度
+        ]
     }
 }
 
-impl CustomOp<f64> for DoublePendulumStep {
+// 泛型实现：同一份 forward/手写 VJP 代码同时服务 f64 与 f32（§12.3 第 38 条）。
+// f64 路径的 FD 隔离器验证（tests/chain_fd.rs）由此覆盖全部代码路径；
+// f32 专属风险（求值点舍入）由 f32/f64 同点对拍测试单独验证。
+impl<S: Scalar> CustomOp<S> for DoublePendulumStep {
     fn num_inputs(&self) -> usize {
         7
     }
@@ -80,18 +81,19 @@ impl CustomOp<f64> for DoublePendulumStep {
     /// 前向：M/c/g 闭式 + 2×2 解析逆 + 半隐式欧拉。
     /// 残差 = [θ1, θ2, ω1, ω2, dt, a1, a2]（7，SmallVec 内联上限内；
     /// ω1'/ω2' 由 ω + dt·a 重算，避免残差超 8 溢出堆）。
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
         let (th1, th2, w1, w2, t1, t2, dt) = (i[0], i[1], i[2], i[3], i[4], i[5], i[6]);
-        let (a11, b, c22, p, q) = self.consts();
+        let [a11, b, c22, p, q] = self.consts();
+        let two = S::one() + S::one();
 
         let c2 = th2.cos();
         let s2 = th2.sin();
         let s12 = (th1 + th2).sin();
 
-        let m11 = a11 + 2.0 * b * c2;
+        let m11 = a11 + two * b * c2;
         let m12 = c22 + b * c2;
         let h = b * s2;
-        let kappa = 2.0 * w1 * w2 + w2 * w2;
+        let kappa = two * w1 * w2 + w2 * w2;
 
         // r = τ − c − g：c1 = −h·κ，c2f = h·ω1²，g1 = P·sinθ1 + Q·s12，g2 = Q·s12
         let r1 = t1 + h * kappa - p * th1.sin() - q * s12;
@@ -131,20 +133,21 @@ impl CustomOp<f64> for DoublePendulumStep {
     // λdt：∂ω'/∂dt = a、∂θ'/∂dt = ω'（ω' = ω + dt·a 由残差重算）。
     //   注意 dt 的 ω' 路径要用 λω'(总计)——θ' = θ + dt·ω' 使 ω' 同时是
     //   θ' 的上游（内部边），其对 dt 的直接边贡献含 λθ'·dt 分量。
-    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
+    fn backward(&self, r: &[S], go: &[S]) -> SmallVec<[S; 8]> {
         let (th1, th2, w1, w2, dt, a1, a2) = (r[0], r[1], r[2], r[3], r[4], r[5], r[6]);
         let (lth1, lth2, lw1, lw2) = (go[0], go[1], go[2], go[3]);
-        let (a11, b, c22, p, q) = self.consts();
+        let [a11, b, c22, p, q] = self.consts();
+        let two = S::one() + S::one();
 
         let c2 = th2.cos();
         let s2 = th2.sin();
         let c12 = (th1 + th2).cos();
         let c1t = th1.cos();
 
-        let m11 = a11 + 2.0 * b * c2;
+        let m11 = a11 + two * b * c2;
         let m12 = c22 + b * c2;
         let h = b * s2;
-        let kappa = 2.0 * w1 * w2 + w2 * w2;
+        let kappa = two * w1 * w2 + w2 * w2;
         let det = m11 * c22 - m12 * m12;
 
         // 内部边：λa、λω'(总计)
@@ -164,12 +167,12 @@ impl CustomOp<f64> for DoublePendulumStep {
         // 汇总各输入槽位
         let g_th1 = lth1 + s0 * (-p * c1t - q * c12) + s1 * (-q * c12);
         let g_th2 = lth2
-            + lm11 * (-2.0 * h)
+            + lm11 * (-two * h)
             + lm12 * (-h)
             + s0 * (b * c2 * kappa - q * c12)
             + s1 * (-b * c2 * w1 * w1 - q * c12);
-        let g_w1 = lw1t + s0 * (2.0 * h * w2) + s1 * (-2.0 * h * w1);
-        let g_w2 = lw2t + s0 * (h * (2.0 * w1 + 2.0 * w2));
+        let g_w1 = lw1t + s0 * (two * h * w2) + s1 * (-two * h * w1);
+        let g_w2 = lw2t + s0 * (h * (two * w1 + two * w2));
         let g_t1 = s0;
         let g_t2 = s1;
         let g_dt = lw1t * a1 + lw2t * a2 + lth1 * (w1 + dt * a1) + lth2 * (w2 + dt * a2);
@@ -181,7 +184,3 @@ impl CustomOp<f64> for DoublePendulumStep {
         "double_pendulum_step"
     }
 }
-
-// 保持 Scalar 在约束说明中被引用
-#[allow(unused)]
-fn _s<S: Scalar>() {}
