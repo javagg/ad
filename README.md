@@ -5,6 +5,7 @@
 梯度质量可度量（健康度分析 + 多重 oracle 验证）。
 
 设计文档：[docs/design.md](docs/design.md)。
+集成教程（CustomOp → 验证 → checkpoint → 优化）：[docs/guide.md](docs/guide.md)。
 
 ## Web 演示（Yew + trunk）
 

@@ -44,6 +44,7 @@ ad-demo    Yew + trunk wasm32 web demo（三面板：标量/单摆checkpoint/IFT
 | `9d1e682` | 手写 CustomOp 双关节摆补全（`ad-physics::chain::DoublePendulumStep`）+ iLQR 逐位对拍；文档 v0.3.4 |
 | （本次 2） | IFT 泛化（矩形残差/warm-start/欠定拒绝，第 29 条）、iLQR box 约束 + MPC 滚动（第 30 条）、f32 标定（第 31 条）、rayon 批量示例（第 32 条）；文档 v0.3.6 |
 | （本次 3） | 体系闭环（§12.3 第 33–36 条）：CustomOp 公开验证器、接触 IFT active-set 模式、健康度接入优化器（κ/μ/拒收计数 + GD 健康度画像）、CustomOp 随机图 fuzz；文档 v0.3.7 |
+| （本次 4） | 规模实证（scale_stress，4000 维 × 10⁴ 步 0.93 s / 37.9 MiB）+ 用户教程 docs/guide.md；文档 v0.3.8 |
 | （本次） | 工具链与场景补全（§12.3 第 28 条）：条件数探针、matvec、**Custom 记录槽位路由潜伏 bug 修复**、记录瘦身（单摆 −59%/−63% 累计）、iLQR LU 多右端、10⁴ 步链场景、§5.4 验收 bench；文档 v0.3.5 |
 
 ## 4. 关键设计决策与陷阱（新 session 必读）
@@ -153,10 +154,17 @@ f32 标定（`f32.rs` + §5.1 表）、rayon 批量示例（`batch_rollout.rs`�
    部分追踪形态 + 先规划后执行 + 值模拟缩放防对消（`fuzz_custom.rs`）。
 
 **仍开放的方向**：crates.io 发布（用户指示暂缓）；box-DDP（逐步 QP）；f32 物理
-算子泛型化；OpRecord arena（压 CustomOp 框架开销 2.4–3.0×）；规模实证
-（10³–10⁴ DOF 压力测试）；用户侧集成教程；经典 Revolve / GradBench（研究性）。
-6. **后续**：box-DDP（逐步 QP）、f32 物理算子泛型化、OpRecord arena、
-   经典 Revolve / GradBench（研究性）。
+算子泛型化；OpRecord arena（压 CustomOp 框架开销 2.4–3.0×）；
+经典 Revolve / GradBench（研究性）。
+
+**第三轮（第 37 条，规模实证与采用通道）**：
+- ~~规模实证~~ ✅ `examples/scale_stress.rs`：稀疏链 4000 维 × 10⁴ 步
+  checkpoint 分段反向 0.93 s / 峰值 37.9 MiB（内存随 T 亚线性 ✓）；
+  稠密全耦合 400 维 × 10³ 步全 tape 18 ms。验证器在 dense 手写 VJP
+  连抓 2 处（对角元 + dt 因子）；
+- ~~用户侧集成教程~~ ✅ `docs/guide.md`（两条路径纪律 → CustomOp 契约 →
+  验证 → checkpoint → 优化器健康度解读 → 常见错误速查表）；
+  README 已链接。
 
 ### 6.5 CI workflow 恢复（需要用户操作）
 `gh auth refresh -h github.com -s workflow` → 浏览器授权 →
@@ -182,9 +190,9 @@ git push                        # 推送（2026-10-06 已同步至 9d1e682+）
 
 | 文件 | 内容 |
 |------|------|
-| `docs/design.md` | 设计文档 v0.3.6 + §12 实现回写（12.3 有 32 条教训） |
+| `docs/design.md` | 设计文档 v0.3.8 + §12 实现回写（12.3 有 37 条教训） |
 | `docs/design.md` §4.3.1 | CustomOp backward 契约（内部边 + 单步 FD 规范） |
-| `docs/design.md` §12.3 | 实现期偏差与教训（32 条，含全部 bug 复盘） |
+| `docs/design.md` §12.3 | 实现期偏差与教训（37 条，含全部 bug 复盘） |
 | `crates/ad-core/src/context.rs` | Context 核心（backward_seeds/Jacobian/clip_grad） |
 | `crates/ad-physics/src/ops.rs` | 6 个空间代数 CustomOp |
 | `crates/ad-physics/src/contact.rs` | 接触力 CustomOp |
