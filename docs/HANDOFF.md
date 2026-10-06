@@ -163,7 +163,8 @@ f32 标定（`f32.rs` + §5.1 表）、rayon 批量示例（`batch_rollout.rs`�
 `git mv .github/ci.yml.pending .github/workflows/ci.yml && git commit && git push`
 
 ### 6.6 推送状态
-✅ 已全部推送（2026-10-06）：远端 master 与本地同步。工作区干净。
+⏳ **待推送**：`4b0806e`（体系闭环，§12.3 第 33–36 条）因网络中断（连接被重置）
+滞留本地——网络恢复后 `git push`。此前提交（至 `8e12fce`）均已推送。工作区干净。
 
 ## 7. 常用命令
 
