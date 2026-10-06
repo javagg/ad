@@ -203,7 +203,7 @@ fn so3_exp_small_angle_continuity() {
 use ad_verify::op_check::validate_custom_op;
 
 fn expect_pass(name: &str, op: Rc<dyn CustomOp<f64>>, points: &[Vec<f64>]) {
-    let report = validate_custom_op(op, points, 1e-5);
+    let report = validate_custom_op(op, points, 1e-6, 1e-5);
     assert!(report.passed, "{name}: {}", report);
 }
 

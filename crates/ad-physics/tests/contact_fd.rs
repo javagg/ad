@@ -142,7 +142,7 @@ fn friction_cone_property() {
         (5.0, 0.0, 0.0),   // 无滑移 → 无摩擦
         (1.0, 100.0, 0.0), // 高速 → |ft| → μ·fn
     ] {
-        let (o, _) = op.forward(&[fn_, vx, vy, 0.6, 0.01]);
+        let (o, _) = op.forward(&[fn_, vx, vy, 0.6f64, 0.01]);
         let ft_mag = (o[0] * o[0] + o[1] * o[1]).sqrt();
         assert!(
             ft_mag <= 0.6 * fn_ + 1e-12,
@@ -152,7 +152,7 @@ fn friction_cone_property() {
     }
     // 高速极限 ≈ μ·fn
     // 高速极限 ≈ μ·fn（vt 沿 x → ft_x 承担全部摩擦）
-    let (o, _) = op.forward(&[1.0, 100.0, 0.0, 0.6, 0.01]);
+    let (o, _) = op.forward(&[1.0f64, 100.0, 0.0, 0.6, 0.01]);
     assert!(
         (o[0].abs() - 0.6).abs() < 1e-3,
         "coulomb limit {}",

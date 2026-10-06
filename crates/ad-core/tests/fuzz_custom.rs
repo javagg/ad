@@ -142,7 +142,7 @@ fn fuzz_ops_pass_the_validator() {
         ("tri", 3, Rc::new(TriOp) as Rc<dyn CustomOp<f64>>),
         ("dot3", 6, Rc::new(Dot3Op) as Rc<dyn CustomOp<f64>>),
     ] {
-        let report = ad_verify::op_check::validate_custom_op(op, &pts(n), 1e-5);
+        let report = ad_verify::op_check::validate_custom_op(op, &pts(n), 1e-6, 1e-5);
         assert!(report.passed, "{name}: {}", report);
     }
 }

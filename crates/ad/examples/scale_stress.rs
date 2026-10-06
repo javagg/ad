@@ -391,7 +391,7 @@ fn main() {
         ("sparse", 4usize, Rc::new(SparseChainStep { n: 4 }) as Rc<dyn CustomOp<f64>>),
         ("dense", 4, Rc::new(DenseCoupleStep { n: 4 }) as Rc<dyn CustomOp<f64>>),
     ] {
-        let report = ad_verify::op_check::validate_custom_op(op, &[], 1e-5);
+        let report = ad_verify::op_check::validate_custom_op(op, &[], 1e-6, 1e-5);
         assert!(report.passed, "{name} VJP 失败:\n{report}");
     }
 

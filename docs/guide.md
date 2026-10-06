@@ -102,11 +102,10 @@ assert!(report.passed, "{}", report);
 检查内容：前向确定性（逐位）+ gins 长度契约 + **四种追踪形态**（全追踪 /
 常量在头部 / 在尾部 / 隔位）下的逐坐标 FD 对拍。历史战绩：库内 7 个算子
 全过；fuzz 算子与压力测试算子的手写 VJP 各被抓出 1–2 处（§12.3 第 33/37 条）。
-
-**tol 选择**：f64 用 1e-5；接触/高刚度算子放大到 1e-4（FD 步长 1e-6 下的
-截断误差随二阶导增长）。验证器为 f64 定制；f32 算子的正确性由
-"同一泛型代码的 f64 验证 + f32/f64 同点对拍"共同保证（§12.3 第 38 条，
-参见 `ad-physics/tests/f32_ops.rs`）。
+**tol 选择**：f64 用 1e-5（fd_step 1e-6）；接触/高刚度算子放大到 1e-4。
+验证器是泛型的（`validate_custom_op<S>`）——f32 算子可直接验证，fd_step 
+1e-3 配 5e-3 相对容差（f32 中心差分的 roundoff/truncation 平衡点），
+参见 `ad-physics/tests/f32_ops.rs` 的 `validator_directly_validates_f32_ops`。
 
 ## 3. 接入 checkpoint（长轨迹的内存形态）
 

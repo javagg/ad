@@ -171,3 +171,61 @@ fn f32_energy_conservation_passive_chain() {
     eprintln!("f32 能量守恒：E0 = {e0:.4}, E1 = {e1:.4}, drift = {drift:.2e}");
     assert!(drift < 0.02, "f32 能量漂移 {drift:.2e} 超过 2%");
 }
+
+// ============================================================ f32 直接验证（§12.3 第 40 条）
+
+/// 泛型验证器在 f32 下直接跑接触与链算子——fd_step 1e-3 / 容差 5e-3
+/// （f32 中心差分的 roundoff/truncation 平衡点）。
+#[test]
+fn validator_directly_validates_f32_ops() {
+    use std::rc::Rc;
+
+    let mut rng = ad_verify::Rng::new(11);
+    let mut pts = |n: usize| -> Vec<Vec<f32>> {
+        (0..3)
+            .map(|_| (0..n).map(|_| 0.5f32 + rng.next_f64() as f32).collect())
+            .collect()
+    };
+    for (name, op, np) in [
+        (
+            "chain_f32",
+            Rc::new(DoublePendulumStep::default()) as Rc<dyn CustomOp<f32>>,
+            7,
+        ),
+        ("gyro_f32", Rc::new(GyroscopicStep) as Rc<dyn CustomOp<f32>>, 7),
+        (
+            "contact_f32",
+            Rc::new(ad_physics::ContactNormalOp) as Rc<dyn CustomOp<f32>>,
+            6,
+        ),
+        (
+            "friction_f32",
+            Rc::new(ad_physics::RegularizedFrictionOp) as Rc<dyn CustomOp<f32>>,
+            5,
+        ),
+    ] {
+        let report = ad_verify::op_check::validate_custom_op(op, &pts(np), 1e-3, 5e-3);
+        assert!(report.passed, "{name}:\n{report}");
+    }
+}
+
+/// f32 摩擦锥性质（f64 版在 contact_fd.rs——同一性质在 f32 严格成立）
+#[test]
+fn f32_friction_cone_property() {
+    let op = ad_physics::RegularizedFrictionOp;
+    let cases: [(f32, f32, f32); 4] = [
+        (3.0, 0.4, -0.7),
+        (0.0, 2.0, 1.0),   // 无法向力 → 无摩擦
+        (5.0, 0.0, 0.0),   // 无滑移 → 无摩擦
+        (1.0, 100.0, 0.0), // 高速 → |ft| → μ·fn
+    ];
+    for (fn_, vx, vy) in cases {
+        let (o, _) = CustomOp::<f32>::forward(&op, &[fn_, vx, vy, 0.6, 0.01]);
+        let ft_mag = (o[0] * o[0] + o[1] * o[1]).sqrt();
+        assert!(
+            ft_mag <= 0.6 * fn_ + 1e-6,
+            "cone violated (f32): {ft_mag} > {}",
+            0.6 * fn_
+        );
+    }
+}

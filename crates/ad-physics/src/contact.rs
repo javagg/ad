@@ -8,13 +8,18 @@
 //!   （接近时 `gap_vel < 0` 力增大 → 耗散）；
 //! - [`RegularizedFrictionOp`]：正则化库仑摩擦，`f_t = −μ·f_n·v_t/√(|v_t|²+ε²)`，
 //!   严格满足 |f_t| ≤ μ·f_n（摩擦锥内）。
+//!
+//! 泛型实现（§12.3 第 38 条模式）：同一份 forward/手写 VJP 服务 f64 与 f32
+//! （`S: Scalar`）；f64 路径由 FD 隔离器 + 接触锥先验验证，f32 由同点对拍
+//! 单独检查（`tests/f32_ops.rs`）。
 
 use ad_core::{CustomOp, Scalar};
 use smallvec::{smallvec, SmallVec};
 
 /// 光滑非负部分：`softplus_ε(x) = ½(x + √(x² + ε²)) ≈ max(0, x)`，C^∞。
-pub fn softplus_eps(x: f64, eps: f64) -> f64 {
-    0.5 * (x + (x * x + eps * eps).sqrt())
+pub fn softplus_eps<S: Scalar>(x: S, eps: S) -> S {
+    let half = S::one() / (S::one() + S::one());
+    half * (x + (x * x + eps * eps).sqrt())
 }
 
 /// Hunt–Crossley 型平滑法向接触力。
@@ -28,37 +33,40 @@ pub fn softplus_eps(x: f64, eps: f64) -> f64 {
 #[derive(Clone, Copy)]
 pub struct ContactNormalOp;
 
-impl CustomOp<f64> for ContactNormalOp {
+impl<S: Scalar> CustomOp<S> for ContactNormalOp {
     fn num_inputs(&self) -> usize {
         6
     }
     fn num_outputs(&self) -> usize {
         1
     }
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
         let (gap, gv, k, p, d, eps) = (i[0], i[1], i[2], i[3], i[4], i[5]);
+        let half = S::one() / (S::one() + S::one());
         let rho = (gap * gap + eps * eps).sqrt();
-        let pen = 0.5 * (-gap + rho);
+        let pen = half * (-gap + rho);
         let f = pen.powf(p) * (k - d * gv);
         (smallvec![f], i.iter().copied().collect())
     }
-    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
+    fn backward(&self, r: &[S], go: &[S]) -> SmallVec<[S; 8]> {
         let (gap, gv, k, p, d, eps) = (r[0], r[1], r[2], r[3], r[4], r[5]);
         let lf = go[0];
+        let half = S::one() / (S::one() + S::one());
+        let two = S::one() + S::one();
         let rho = (gap * gap + eps * eps).sqrt();
-        let pen = 0.5 * (-gap + rho);
+        let pen = half * (-gap + rho);
         // ∂pen/∂gap = ½(−1 + gap/ρ)
-        let dpen = 0.5 * (-1.0 + gap / rho);
+        let dpen = half * (-S::one() + gap / rho);
         let base = k - d * gv; // k − d·gap_vel
         let pen_p = pen.powf(p);
-        let pen_pm1 = pen.powf(p - 1.0);
+        let pen_pm1 = pen.powf(p - S::one());
         smallvec![
-            lf * p * pen_pm1 * base * dpen,              // ∂/∂gap
-            lf * (-d * pen_p),                           // ∂/∂gap_vel
-            lf * pen_p,                                  // ∂/∂k
-            lf * pen_p * pen.ln() * base,                // ∂/∂p
-            lf * (-pen_p * gv),                          // ∂/∂d
-            lf * p * pen_pm1 * base * eps / (2.0 * rho), // ∂pen/∂ε = ε/(2ρ)
+            lf * p * pen_pm1 * base * dpen,                  // ∂/∂gap
+            lf * (-d * pen_p),                               // ∂/∂gap_vel
+            lf * pen_p,                                      // ∂/∂k
+            lf * pen_p * pen.ln() * base,                    // ∂/∂p
+            lf * (-pen_p * gv),                              // ∂/∂d
+            lf * p * pen_pm1 * base * eps / (two * rho),     // ∂pen/∂ε = ε/(2ρ)
         ]
     }
     fn name(&self) -> &'static str {
@@ -76,14 +84,14 @@ impl CustomOp<f64> for ContactNormalOp {
 #[derive(Clone, Copy)]
 pub struct RegularizedFrictionOp;
 
-impl CustomOp<f64> for RegularizedFrictionOp {
+impl<S: Scalar> CustomOp<S> for RegularizedFrictionOp {
     fn num_inputs(&self) -> usize {
         5
     }
     fn num_outputs(&self) -> usize {
         2
     }
-    fn forward(&self, i: &[f64]) -> (SmallVec<[f64; 8]>, SmallVec<[f64; 8]>) {
+    fn forward(&self, i: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
         let (fn_, vx, vy, mu, eps) = (i[0], i[1], i[2], i[3], i[4]);
         let r = (vx * vx + vy * vy + eps * eps).sqrt();
         (
@@ -91,7 +99,7 @@ impl CustomOp<f64> for RegularizedFrictionOp {
             i.iter().copied().collect(),
         )
     }
-    fn backward(&self, r: &[f64], go: &[f64]) -> SmallVec<[f64; 8]> {
+    fn backward(&self, r: &[S], go: &[S]) -> SmallVec<[S; 8]> {
         let (fn_, vx, vy, mu, eps) = (r[0], r[1], r[2], r[3], r[4]);
         let (lx, ly) = (go[0], go[1]);
         let s2 = vx * vx + vy * vy;
@@ -109,7 +117,3 @@ impl CustomOp<f64> for RegularizedFrictionOp {
         "regularized_friction"
     }
 }
-
-// 保持 Scalar 在约束说明中被引用
-#[allow(unused)]
-fn _s<S: Scalar>() {}

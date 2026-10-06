@@ -13,19 +13,24 @@
 //! 并在四种**追踪形态**下重复对拍——常量输入占非尾部槽位的形态曾暴露
 //! 梯度路由潜伏 bug（§12.3 第 28b 条），故隔位/前常量形态是标准检查项。
 
-use crate::Rng;
-use ad_core::{Context, CustomOp, AD};
+use ad_core::{Context, CustomOp, AD, Scalar};
+use num_traits::NumCast;
 use std::rc::Rc;
+
+use crate::Rng;
 
 /// 混合全部输出的标量损失（固定伪随机权重，确定性）。
 /// 与各 FD 隔离器测试（ops_fd.rs / chain_fd.rs / contact_fd.rs）同约定。
-pub fn mixed_output_loss(out: &[f64]) -> f64 {
-    let mut s = 0.0;
+pub fn mixed_output_loss<S: Scalar>(out: &[S]) -> S {
+    let mut s = S::zero();
     for (i, &o) in out.iter().enumerate() {
-        s += (0.3 + 0.11 * i as f64) * o + 0.2 * o * o;
+        let w: S = NumCast::from(0.3 + 0.11 * i as f64).expect("weight cast");
+        let quad: S = NumCast::from(0.2).expect("weight cast");
+        s = s + w * o + quad * o * o;
     }
     if out.len() >= 2 {
-        s += 0.15 * out[0] * out[out.len() - 1];
+        let cross: S = NumCast::from(0.15).expect("weight cast");
+        s = s + cross * out[0] * out[out.len() - 1];
     }
     s
 }
@@ -113,23 +118,32 @@ fn tracking_masks(n: usize) -> Vec<(String, Vec<bool>)> {
 
 /// 在 `points`（每个长度 == `num_inputs`）上验证算子。`points` 为空时用
 /// 确定性 Rng 生成 3 个 [0.5, 1.5] 的点（注意：算子定义域未知时自动点
-/// 可能落在域外——建议始终传入定义域内的点）。`tol` 为 FD 对拍的相对容差
-/// （f64 推荐 1e-5–1e-6；非线性强的算子可放宽）。
-pub fn validate_custom_op(
-    op: Rc<dyn CustomOp<f64>>,
-    points: &[Vec<f64>],
+/// 可能落在域外——建议始终传入定义域内的点）。
+///
+/// `fd_step`：中心差分步长（f64 推荐 1e-6；f32 推荐 1e-3——f32 的
+/// roundoff/truncation 平衡点更高，配 5e-3 相对容差）。`tol` 为 FD 对拍
+/// 的相对容差（f64 推荐 1e-5–1e-6；非线性强的算子可放宽）。
+///
+/// 泛型说明（§12.3 第 40 条）：同一算子的 f64 实例经本函数验证即覆盖
+/// 泛型代码路径；f32 实例可直接以更粗的 fd_step/容差单独验证。
+pub fn validate_custom_op<S: Scalar>(
+    op: Rc<dyn CustomOp<S>>,
+    points: &[Vec<S>],
+    fd_step: S,
     tol: f64,
 ) -> OpValidationReport {
     let n = op.num_inputs();
     let n_out = op.num_outputs();
     let name = op.name().to_string();
+    let cast = |v: f64| -> S { NumCast::from(v).expect("constant cast f64→S") };
+    let to_f64 = |v: S| -> f64 { NumCast::from(v).unwrap_or(f64::NAN) };
 
     // 空输入时生成确定性默认点（值域 [0.5, 1.5]，规避常见对数/除法定义域）
-    let owned: Vec<Vec<f64>>;
-    let points: &[Vec<f64>] = if points.is_empty() {
+    let owned: Vec<Vec<S>>;
+    let points: &[Vec<S>] = if points.is_empty() {
         let mut rng = Rng::new(0x9E3779B97F4A7C15);
         owned = (0..3)
-            .map(|_| (0..n).map(|_| 0.5 + rng.next_f64()).collect())
+            .map(|_| (0..n).map(|_| cast(0.5 + rng.next_f64())).collect())
             .collect();
         &owned
     } else {
@@ -146,7 +160,7 @@ pub fn validate_custom_op(
         failures: Vec::new(),
     };
 
-    // ---- 前向契约：输出数 + 确定性（逐位） + VJP gins 长度（结构性，查一次） ----
+    // ---- 前向契约：输出数 + 确定性（逐位） ----
     for (pi, p) in points.iter().enumerate() {
         debug_assert_eq!(p.len(), n, "point {pi} length != num_inputs");
         let (outs1, _) = op.forward(p);
@@ -169,7 +183,7 @@ pub fn validate_custom_op(
             && outs1
                 .iter()
                 .zip(outs2.iter())
-                .any(|(a, b)| a.to_bits() != b.to_bits())
+                .any(|(a, b)| !(a == b || (a.is_nan() && b.is_nan())))
         {
             report.passed = false;
             report.failures.push(OpFailure {
@@ -189,7 +203,9 @@ pub fn validate_custom_op(
     if !points.is_empty() {
         let (p0_outs, p0_res) = op.forward(&points[0]);
         if p0_outs.len() == n_out {
-            let gout: Vec<f64> = (0..n_out).map(|k| if k == 0 { 1.0 } else { 0.3 }).collect();
+            let gout: Vec<S> = (0..n_out)
+                .map(|k| cast(if k == 0 { 1.0 } else { 0.3 }))
+                .collect();
             let gins = op.backward(&p0_res, &gout);
             if gins.len() != n {
                 gins_len_ok = false;
@@ -210,7 +226,6 @@ pub fn validate_custom_op(
     }
 
     // ---- VJP FD 对拍（四种追踪形态；gins 长度不合法时跳过——已报告） ----
-    let h = 1e-6;
     for (shape_name, mask) in tracking_masks(n) {
         report.shapes.push(shape_name.clone());
         if !gins_len_ok {
@@ -218,8 +233,8 @@ pub fn validate_custom_op(
         }
         for (pi, p) in points.iter().enumerate() {
             // AD 路径：按形态构造追踪/常量输入
-            let mut ctx = Context::<f64>::new();
-            let mut ads: Vec<AD<f64>> = Vec::with_capacity(n);
+            let mut ctx = Context::<S>::new();
+            let mut ads: Vec<AD<S>> = Vec::with_capacity(n);
             let mut vars: Vec<(usize, ad_core::Variable)> = Vec::new();
             for (i, &v) in p.iter().enumerate() {
                 if mask[i] {
@@ -232,22 +247,23 @@ pub fn validate_custom_op(
             }
             let outs = ctx.call_custom_dyn(Rc::clone(&op), "op_under_test", &ads);
             let m = outs.len();
-            let mut loss: Option<AD<f64>> = None;
+            // loss = Σ w_i·o_i + 0.2·o_i² + 0.15·o_0·o_last（与 mixed_output_loss 一致）
+            let mut loss: Option<AD<S>> = None;
             if m > 0 {
-                let lin = ctx.mul(AD::constant(0.3 + 0.0), outs[0]);
+                let lin = ctx.mul(AD::constant(cast(0.3)), outs[0]);
                 let sq = ctx.mul(outs[0], outs[0]);
-                let quad = ctx.mul(AD::constant(0.2), sq);
+                let quad = ctx.mul(AD::constant(cast(0.2)), sq);
                 loss = Some(ctx.add(lin, quad));
-                for i in 1..m {
-                    let lin = ctx.mul(AD::constant(0.3 + 0.11 * i as f64), outs[i]);
-                    let sq = ctx.mul(outs[i], outs[i]);
-                    let quad = ctx.mul(AD::constant(0.2), sq);
+                for (i, o) in outs.iter().enumerate().skip(1) {
+                    let lin = ctx.mul(AD::constant(cast(0.3 + 0.11 * i as f64)), *o);
+                    let sq = ctx.mul(*o, *o);
+                    let quad = ctx.mul(AD::constant(cast(0.2)), sq);
                     let term = ctx.add(lin, quad);
                     loss = Some(ctx.add(loss.unwrap(), term));
                 }
                 if m >= 2 {
                     let cross_in = ctx.mul(outs[0], outs[m - 1]);
-                    let cross = ctx.mul(AD::constant(0.15), cross_in);
+                    let cross = ctx.mul(AD::constant(cast(0.15)), cross_in);
                     loss = Some(ctx.add(loss.unwrap(), cross));
                 }
             }
@@ -255,21 +271,25 @@ pub fn validate_custom_op(
             if let Some(l) = loss {
                 ctx.backward(l);
                 for (_, var) in &vars {
-                    ad_grads.push(ctx.grad(*var).unwrap_or(f64::NAN));
+                    ad_grads.push(to_f64(ctx.grad(*var).unwrap_or_else(|| {
+                        S::nan()
+                    })));
                 }
             }
 
             // FD 对拍（仅追踪坐标——常量坐标无梯度可验）
             for (k, &(coord, _)) in vars.iter().enumerate() {
                 let mut tp = p.clone();
-                tp[coord] += h;
+                tp[coord] = tp[coord] + fd_step;
                 let mut tm = p.clone();
-                tm[coord] -= h;
+                tm[coord] = tm[coord] - fd_step;
                 let fp = mixed_output_loss(&op.forward(&tp).0);
                 let fm = mixed_output_loss(&op.forward(&tm).0);
-                let fd = (fp - fm) / (2.0 * h);
-                let ad = ad_grads[k];
-                let rel = (ad - fd).abs() / (1.0 + ad.abs() + fd.abs());
+                let two = S::one() + S::one();
+                let fd = (fp - fm) / (two * fd_step);
+                let ad_f = ad_grads[k];
+                let (ad_s, fd_s) = (ad_f, to_f64(fd));
+                let rel = (ad_f - fd_s).abs() / (1.0 + ad_f.abs() + fd_s.abs());
                 report.coords_checked += 1;
                 if rel > report.max_rel_error {
                     report.max_rel_error = rel;
@@ -280,8 +300,8 @@ pub fn validate_custom_op(
                         shape: shape_name.clone(),
                         point: pi,
                         coord,
-                        ad_grad: ad,
-                        fd_grad: fd,
+                        ad_grad: ad_s,
+                        fd_grad: fd_s,
                         detail: String::new(),
                     });
                 }

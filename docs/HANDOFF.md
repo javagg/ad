@@ -47,6 +47,7 @@ ad-demo    Yew + trunk wasm32 web demo（三面板：标量/单摆checkpoint/IFT
 | （本次 4） | 规模实证（scale_stress，4000 维 × 10⁴ 步 0.93 s / 37.9 MiB）+ 用户教程 docs/guide.md；文档 v0.3.8 |
 | （本次 5） | f32 物理算子泛型化（DoublePendulumStep + GyroscopicStep，f32/f64 对拍 + f32 能量守恒漂移 3.8e-3）；文档 v0.3.9 |
 | （本次 6） | box-DDP control-limited backward pass（solve_kk_boxed，投影坐标下降；松界逐位等价 / 界宽单调 / 饱和断言）；文档 v0.4.0 |
+| （本次 7） | f32 体系收尾（第 40 条）：接触算子泛型化 + 验证器泛型化（validate_custom_op<S>，f32 直接 FD 验证）；文档 v0.4.1 |
 | （本次） | 工具链与场景补全（§12.3 第 28 条）：条件数探针、matvec、**Custom 记录槽位路由潜伏 bug 修复**、记录瘦身（单摆 −59%/−63% 累计）、iLQR LU 多右端、10⁴ 步链场景、§5.4 验收 bench；文档 v0.3.5 |
 
 ## 4. 关键设计决策与陷阱（新 session 必读）
@@ -155,8 +156,8 @@ f32 标定（`f32.rs` + §5.1 表）、rayon 批量示例（`batch_rollout.rs`�
 4. ~~CustomOp 随机图 fuzz~~ ✅ 3 算子 × 24 步随机 DAG × 512 例 vs 双数 oracle，
    部分追踪形态 + 先规划后执行 + 值模拟缩放防对消（`fuzz_custom.rs`）。
 
-**仍开放的方向**：crates.io 发布（用户指示暂缓）；~~box-DDP~~ ✅ control-limited backward pass（第 39 条）；接触、空间代数
-算子的 f32 泛型化（已有 2 个示范，第 38 条）+ op_check f32 版；OpRecord arena（压 CustomOp 框架开销 2.4–3.0×）；
+**仍开放的方向**：crates.io 发布（用户指示暂缓）；~~box-DDP~~ ✅ control-limited backward pass（第 39 条）；接触算子 ✅ 与空间代数
+算子的 f32 泛型化（第 38 条完成 2 个、第 40 条完成接触 2 个）；op_check f32 版 ✅（第 40 条）；OpRecord arena（压 CustomOp 框架开销 2.4–3.0×）；
 经典 Revolve / GradBench（研究性）。
 
 **第三轮（第 37 条，规模实证与采用通道）**：

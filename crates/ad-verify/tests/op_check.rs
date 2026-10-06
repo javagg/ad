@@ -45,7 +45,7 @@ fn correct_op_passes_all_shapes() {
     let report = validate_custom_op(
         Rc::new(GoodOp),
         &[vec![0.7, -1.3, 0.4], vec![-0.2, 0.9, 1.1]],
-        1e-5,
+        1e-6, 1e-5,
     );
     assert!(report.passed, "{}", report);
     assert_eq!(report.shapes.len(), 4, "3 输入应有 4 种追踪形态");
@@ -55,8 +55,8 @@ fn correct_op_passes_all_shapes() {
 #[test]
 fn correct_op_auto_points_pass() {
     // 空点集 → 确定性自动点
-    let r1 = validate_custom_op(Rc::new(GoodOp), &[], 1e-5);
-    let r2 = validate_custom_op(Rc::new(GoodOp), &[], 1e-5);
+    let r1 = validate_custom_op(Rc::new(GoodOp), &[], 1e-6, 1e-5);
+    let r2 = validate_custom_op(Rc::new(GoodOp), &[], 1e-6, 1e-5);
     assert!(r1.passed, "{}", r1);
     assert_eq!(r1.max_rel_error.to_bits(), r2.max_rel_error.to_bits());
 }
@@ -88,7 +88,7 @@ impl CustomOp<f64> for MisroutedOp {
 
 #[test]
 fn misrouted_vjp_is_caught() {
-    let report = validate_custom_op(Rc::new(MisroutedOp), &[vec![0.7, -1.3, 0.4]], 1e-5);
+    let report = validate_custom_op(Rc::new(MisroutedOp), &[vec![0.7, -1.3, 0.4]], 1e-6, 1e-5);
     assert!(!report.passed, "错路由 VJP 必须被抓：{}", report);
     // 至少一个形态报告了坐标级失败（非契约失败）
     assert!(
@@ -124,7 +124,7 @@ impl CustomOp<f64> for ShortGradOp {
 
 #[test]
 fn wrong_gins_length_is_caught() {
-    let report = validate_custom_op(Rc::new(ShortGradOp), &[vec![1.0, 2.0, 3.0]], 1e-5);
+    let report = validate_custom_op(Rc::new(ShortGradOp), &[vec![1.0, 2.0, 3.0]], 1e-6, 1e-5);
     assert!(!report.passed, "{}", report);
     assert!(
         report
@@ -161,7 +161,7 @@ impl CustomOp<f64> for NondetOp {
 
 #[test]
 fn nondeterministic_forward_is_caught() {
-    let report = validate_custom_op(Rc::new(NondetOp { tick: std::cell::Cell::new(0.0) }), &[], 1e-5);
+    let report = validate_custom_op(Rc::new(NondetOp { tick: std::cell::Cell::new(0.0) }), &[], 1e-6, 1e-5);
     assert!(!report.passed, "{}", report);
     assert!(
         report
