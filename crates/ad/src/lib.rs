@@ -15,8 +15,8 @@ pub use ad_checkpoint::{CheckpointManager, CheckpointStrategy, PendulumSim, Reco
 pub use ad_custom::{linear_solve, ImplicitSolve, ImplicitSolveCfg, Residual};
 pub use ad_ops::*;
 pub use ad_physics::{
-    ContactNormalOp, InertiaApply, PluckerForce, PluckerMotion, RegularizedFrictionOp,
-    RotateInertia, So3Exp, SpatialCrossMotion,
+    ContactNormalOp, DoublePendulumStep, GyroscopicStep, InertiaApply, PluckerForce, PluckerMotion,
+    RegularizedFrictionOp, RotateInertia, So3Exp, SpatialCrossMotion,
 };
 pub use ad_verify::{
     GradientChecker, GradientHealth, NonSmoothnessReport, StabilityVerdict, TaylorReport,

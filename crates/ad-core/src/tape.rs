@@ -17,12 +17,14 @@ pub(crate) enum OpRecord<S: Scalar> {
     },
     /// 自定义算子：多输入多输出，反向调用 VJP。
     /// `inputs` 携带该输入在算子原始输入列表中的槽位（常量输入不占节点但占槽位）。
-    /// 内联容量 8：物理算子常见 5–8 输入（如单摆步 5、陀螺 6），避免热路径堆溢出。
+    /// 输出节点由 [`NodeId`](crate::NodeId) 单调分配保证**连续**，存 base 即可
+    /// （反向时输出伴随 = `adjoints[base..base+n]` 的连续切片，无需收集）。
     Custom {
         name: &'static str,
         op: Rc<dyn CustomOp<S>>,
         inputs: SmallVec<[(usize, NodeId); 8]>,
-        outputs: SmallVec<[NodeId; 8]>,
+        /// 首个输出节点（输出 n = op.num_outputs() 连续排布）
+        output_base: NodeId,
         /// 前向保存的残差数据（f_fwd 风格），backward 时原样传回
         residual: SmallVec<[S; 8]>,
     },

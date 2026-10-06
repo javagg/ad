@@ -10,7 +10,7 @@
 //! 物理引擎如有解析 Jacobian，应自己实现 `CustomOp` 覆盖此路径。
 //!
 //! 约束：残差系统为**方阵**（nr = nx）；`∂r/∂x` 病态（高刚度接触）时伴随解
-//! 不可靠——用 `ad-verify` 的条件数探针检查。
+//! 不可靠——用 `ad_verify::condition_number_inf` 检查（κ∞ ≳ 1e12 伴随解不可信）。
 
 use ad_core::dual::Dual;
 use ad_core::CustomOp;

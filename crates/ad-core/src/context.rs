@@ -252,29 +252,39 @@ impl<S: Scalar> Context<S> {
                     name,
                     op,
                     inputs,
-                    outputs,
+                    output_base,
                     residual,
                 } => {
-                    let gout: SmallVec<[S; 8]> =
-                        outputs.iter().map(|o| adjoints[o.index()]).collect();
-                    if gout.iter().all(|&g| g == S::zero()) {
-                        continue;
-                    }
-                    let gins = op.backward(&residual[..], &gout[..]);
+                    // 输出节点连续（NodeId 单调分配）：输出伴随是 adjoints 的
+                    // 连续切片，直接以切片形式传入 VJP（无收集拷贝）
+                    let n_out = op.num_outputs();
+                    let base = output_base.index();
+                    let gins = {
+                        let gout = &adjoints[base..base + n_out];
+                        if gout.iter().all(|&g| g == S::zero()) {
+                            continue;
+                        }
+                        op.backward(&residual[..], gout)
+                    };
                     debug_assert_eq!(
                         gins.len(),
                         op.num_inputs(),
                         "CustomOp '{}' returned wrong number of input gradients",
                         name
                     );
-                    for (&(slot, inode), g) in inputs.iter().zip(gins.iter()) {
-                        let t = adjoints[inode.index()] + *g;
+                    // gins 按**原始槽位**索引（常量输入占槽位但不占节点）——
+                    // tracked 子集必须按 slot 取，不能与 gins 按位置 zip：
+                    // 常量在尾部时 zip 恰好对齐（潜伏 bug，matvec 部分追踪
+                    // 形态首踩：M 常量在前、v 在后，zip 错把 λM 路由给 λv）
+                    for &(slot, inode) in inputs.iter() {
+                        let g = gins[slot];
+                        let t = adjoints[inode.index()] + g;
                         if *detect_anomaly && !t.is_finite() && !*anomaly_reported {
                             *anomaly_reported = true;
                             panic!(
                                 "gradient anomaly: non-finite adjoint at record #{} (custom op '{}', \
-                                 input slot {} {:?}): grad_output {:?}, contribution {:?}",
-                                idx, name, slot, inode, gout, g
+                                 input slot {} {:?}): output_base {:?}, contribution {:?}",
+                                idx, name, slot, inode, output_base, g
                             );
                         }
                         adjoints[inode.index()] = t;
@@ -457,7 +467,14 @@ impl<S: Scalar> Context<S> {
         if self.no_grad_depth > 0 || inputs.iter().all(|x| x.node.is_none()) {
             return outs.iter().map(|&v| AD::constant(v)).collect();
         }
-        let out_ids: SmallVec<[NodeId; 8]> = outs.iter().map(|&v| self.alloc_node(v)).collect();
+        // 输出节点连续分配：记录 base，返回值直接用本地计数重建 id
+        if outs.is_empty() {
+            return SmallVec::new();
+        }
+        let output_base = self.alloc_node(outs[0]);
+        for &v in &outs[1..] {
+            self.alloc_node(v);
+        }
         let tracked: SmallVec<[(usize, NodeId); 8]> = inputs
             .iter()
             .enumerate()
@@ -467,12 +484,13 @@ impl<S: Scalar> Context<S> {
             name,
             op,
             inputs: tracked,
-            outputs: out_ids.clone(),
+            output_base,
             residual,
         });
+        let base = output_base.index();
         outs.iter()
-            .zip(out_ids)
-            .map(|(&v, id)| AD::tracked(v, id))
+            .enumerate()
+            .map(|(k, &v)| AD::tracked(v, NodeId::new(base + k)))
             .collect()
     }
 

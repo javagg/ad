@@ -3,8 +3,9 @@
 //! 面向 IFT 反向的 n ≲ 数百规模系统；大规模系统物理引擎应自带求解器
 //! 并通过 `CustomOp` 直接接入。
 
-/// 解 `A x = b`。`a` 为行主序 n×n；奇异行返回部分结果（调用方应检查条件数，
-/// 见设计文档 §4.3.3 的病态风险）。
+/// 解 `A x = b`。`a` 为行主序 n×n；奇异行返回部分结果——调用方应先用
+/// `ad_verify::condition_number_inf` 检查条件数（设计文档 §4.3.3 的病态风险：
+/// κ∞ ≳ 1e12 时伴随解基本不可信，需正则化或改用直接法）。
 pub fn solve_linear(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
     let n = b.len();
     debug_assert_eq!(a.len(), n);
@@ -85,4 +86,35 @@ mod tests {
             assert!((rt - b[i]).abs() < 1e-10);
         }
     }
+}
+
+/// 条件数探针的预期用法（§4.3.3）：求解前检查 κ∞，病态时走正则化路径。
+#[test]
+fn ill_conditioned_system_is_flagged_by_probe() {
+    use ad_verify::condition_number_inf;
+
+    // 良态：残差检验通过，κ∞ 小
+    let good = vec![vec![2.0, 1.0], vec![1.0, 3.0]];
+    let x = solve_linear(&good, &[5.0, 10.0]);
+    assert!((x[0] - 1.0).abs() < 1e-12);
+    assert!(condition_number_inf(&good) < 1e3);
+
+    // 病态（Hilbert 8 阶）：κ∞ ~ 1e10，残差开始劣化——探针先于残差给出告警
+    let n = 8;
+    let bad: Vec<Vec<f64>> = (0..n)
+        .map(|i| (0..n).map(|j| 1.0 / ((i + j + 1) as f64)).collect())
+        .collect();
+    let b: Vec<f64> = (0..n).map(|i| 1.0 + 0.1 * i as f64).collect();
+    let x = solve_linear(&bad, &b);
+    let residual: f64 = (0..n)
+        .map(|i| {
+            let r: f64 = (0..n).map(|j| bad[i][j] * x[j]).sum();
+            (r - b[i]).abs()
+        })
+        .fold(0.0, f64::max);
+    let kappa = condition_number_inf(&bad);
+    eprintln!("Hilbert-8: κ∞ = {kappa:.3e}, max residual = {residual:.3e}");
+    assert!(kappa > 1e9, "κ∞ = {kappa}");
+    // 病态但非奇异：解仍可用，但有效位数损失 ~log10(κ)——文档化的预期行为
+    assert!(residual < 1e-6);
 }

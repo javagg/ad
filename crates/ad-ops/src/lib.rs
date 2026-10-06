@@ -353,6 +353,24 @@ pub fn norm2_with<S: Scalar>(ctx: &mut Context<S>, x: &[AD<S>]) -> AD<S> {
     ctx.call_custom(Norm2Op { n: x.len() }, x).remove(0)
 }
 
+/// 行主序矩阵-向量乘 `y = M·v`（O(n²) bulk，设计文档 §4.3.4）：
+/// rows 条输出 = 1 条 tape 记录，而非 rows×cols 条逐元素记录。
+/// `m` 为行主序 rows×cols；inputs = [M..., v...]，outputs = y（rows）。
+pub fn matvec_with<S: Scalar>(ctx: &mut Context<S>, m: &[AD<S>], v: &[AD<S>]) -> Vec<AD<S>> {
+    let cols = v.len();
+    assert!(
+        cols > 0 && m.len().is_multiple_of(cols),
+        "matvec: matrix length {} not a positive multiple of vector length {cols}",
+        m.len()
+    );
+    let rows = m.len() / cols;
+    let mut inputs = Vec::with_capacity(m.len() + cols);
+    inputs.extend_from_slice(m);
+    inputs.extend_from_slice(v);
+    ctx.call_custom(MatVecOp { rows, cols }, &inputs)
+        .to_vec()
+}
+
 /// `dot(a, b)`：线程局部版本
 pub fn dot<S: Scalar>(a: &[AD<S>], b: &[AD<S>]) -> AD<S> {
     ad_core::with_context(|c: &mut Context<S>| dot_with(c, a, b))
@@ -366,6 +384,11 @@ pub fn axpy<S: Scalar>(alpha: AD<S>, x: &[AD<S>], y: &[AD<S>]) -> SmallVec<[AD<S
 /// `‖x‖₂`：线程局部版本
 pub fn norm2<S: Scalar>(x: &[AD<S>]) -> AD<S> {
     ad_core::with_context(|c: &mut Context<S>| norm2_with(c, x))
+}
+
+/// `y = M·v`：线程局部版本
+pub fn matvec<S: Scalar>(m: &[AD<S>], v: &[AD<S>]) -> Vec<AD<S>> {
+    ad_core::with_context(|c: &mut Context<S>| matvec_with(c, m, v))
 }
 
 // ---- bulk CustomOp 实现 ----
@@ -479,5 +502,54 @@ impl<S: Scalar> CustomOp<S> for Norm2Op {
     }
     fn name(&self) -> &'static str {
         "norm2"
+    }
+}
+
+/// matvec：inputs = [M (rows×cols 行主序)..., v...]，residual = [M..., v...]
+/// backward：λM_ij = λy_i·v_j，λv_j = Σ_i λy_i·M_ij。
+/// M 的每个元素只占一个槽位（无对称打包），λM 是逐元素全和路由。
+struct MatVecOp {
+    rows: usize,
+    cols: usize,
+}
+
+impl<S: Scalar> CustomOp<S> for MatVecOp {
+    fn num_inputs(&self) -> usize {
+        self.rows * self.cols + self.cols
+    }
+    fn num_outputs(&self) -> usize {
+        self.rows
+    }
+    fn forward(&self, inputs: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
+        let (r, c) = (self.rows, self.cols);
+        let mut outs = SmallVec::new();
+        for i in 0..r {
+            let mut acc = S::zero();
+            for j in 0..c {
+                acc = acc + inputs[i * c + j] * inputs[r * c + j];
+            }
+            outs.push(acc);
+        }
+        (outs, inputs.iter().copied().collect())
+    }
+    fn backward(&self, residual: &[S], grad_output: &[S]) -> SmallVec<[S; 8]> {
+        let (r, c) = (self.rows, self.cols);
+        let mut grads = SmallVec::new();
+        for i in 0..r {
+            for j in 0..c {
+                grads.push(grad_output[i] * residual[r * c + j]); // ∂y_i/∂M_ij = v_j
+            }
+        }
+        for j in 0..c {
+            let mut acc = S::zero();
+            for i in 0..r {
+                acc = acc + grad_output[i] * residual[i * c + j]; // ∂y_i/∂v_j = M_ij
+            }
+            grads.push(acc);
+        }
+        grads
+    }
+    fn name(&self) -> &'static str {
+        "matvec"
     }
 }

@@ -375,3 +375,138 @@ fn chain_one_step_per_coordinate_fd() {
         );
     }
 }
+
+
+// ============================================================ 4. 多体链 10⁴ 步 + checkpoint（§5.3 末行）
+//
+// 20 维状态（N=10 体）× 10⁴ 步：分段反向 vs 全 tape 一致（1e-10）、
+// 同策略重跑 bit-exact（§4.5.6 双重判据）、Uniform 调度的重算恰好 1× 前向。
+
+use ad::{CheckpointManager, CheckpointStrategy, Recomputable};
+
+/// 弹簧链仿真（`ChainStep` 的 `Recomputable` 封装；k 为外部叶子参数）。
+struct ChainSim {
+    n: usize,
+    dt: f64,
+    k: AD<f64>,
+    x: Vec<f64>, // [q..., v...] 标量镜像
+    state_ad: Vec<AD<f64>>,
+    steps_executed: usize,
+}
+
+impl ChainSim {
+    fn new(n: usize, dt: f64, k: AD<f64>, x: Vec<f64>, ctx: &mut Context<f64>) -> Self {
+        let mut sim = ChainSim {
+            n,
+            dt,
+            k,
+            x,
+            state_ad: Vec::new(),
+            steps_executed: 0,
+        };
+        sim.bind_state(ctx);
+        sim
+    }
+}
+
+impl Recomputable for ChainSim {
+    type State = Vec<f64>;
+
+    fn save_state(&self) -> Self::State {
+        self.x.clone()
+    }
+
+    fn load_state(&mut self, state: &Self::State) {
+        self.x = state.clone();
+    }
+
+    fn bind_state(&mut self, ctx: &mut Context<f64>) -> Vec<AD<f64>> {
+        self.state_ad = self.x.iter().map(|&v| ctx.var(v).0).collect();
+        self.state_ad.clone()
+    }
+
+    fn state(&self) -> &[AD<f64>] {
+        &self.state_ad
+    }
+
+    fn step(&mut self, ctx: &mut Context<f64>) {
+        self.steps_executed += 1;
+        let mut inp = self.state_ad.clone();
+        inp.push(self.k);
+        inp.push(AD::constant(self.dt));
+        let outs = ctx.call_custom(ChainStep { n: self.n }, &inp);
+        for (i, o) in outs.iter().enumerate() {
+            self.x[i] = o.value;
+        }
+        self.state_ad = outs.to_vec();
+    }
+}
+
+#[test]
+fn scenario_chain_10k_checkpoint_segmented_matches_full_tape() {
+    const N: usize = 10; // 20 维状态
+    const T: usize = 10_000;
+    const DT: f64 = 0.02;
+    const K: f64 = 2.5;
+
+    // 初始状态：确定性扰动（避免依赖随机数发生器）
+    let mut init = vec![0.0f64; 2 * N];
+    for i in 0..N {
+        init[i] = 0.3 * ((i * 7 + 3) % 13) as f64 / 13.0 - 0.15;
+        init[N + i] = 0.1 * ((i * 5 + 1) % 11) as f64 / 11.0 - 0.05;
+    }
+
+    let loss_fn = |ctx: &mut Context<f64>, sim: &ChainSim| {
+        let mut l = AD::constant(0.0);
+        for xi in &sim.state()[..N] {
+            let sq = ctx.mul(*xi, *xi);
+            l = ctx.add(l, sq);
+        }
+        ctx.mul(AD::constant(0.5), l)
+    };
+
+    // ---- 全 tape 参考：10⁴ 条记录（1 条/步）一次反向 ----
+    let mut ctx_full = Context::<f64>::new();
+    let (k_full, vk_full) = ctx_full.var(K);
+    let mut sim_full = ChainSim::new(N, DT, k_full, init.clone(), &mut ctx_full);
+    let input_ads: Vec<AD<f64>> = sim_full.state().to_vec(); // 初始状态叶子句柄
+    for _ in 0..T {
+        sim_full.step(&mut ctx_full);
+    }
+    assert!(ctx_full.tape_len() >= T, "每步至少 1 条记录");
+    let l = loss_fn(&mut ctx_full, &sim_full);
+    ctx_full.backward(l);
+    let mut grads_full: Vec<f64> = input_ads
+        .iter()
+        .map(|&a| ctx_full.grad_of(a).unwrap())
+        .collect();
+    grads_full.push(ctx_full.grad(vk_full).unwrap());
+
+    // ---- Uniform{interval:100} 分段反向（跑两遍验证重跑 bit-exact） ----
+    let run_segmented = || -> Vec<f64> {
+        let mut ctx = Context::<f64>::new();
+        let (k_ad, vk) = ctx.var(K);
+        let mut sim = ChainSim::new(N, DT, k_ad, init.clone(), &mut ctx);
+        let mut ckpt =
+            CheckpointManager::new(CheckpointStrategy::Uniform { interval: 100 }, &sim);
+        for t in 0..T {
+            ckpt.forward_step(&mut ctx, &mut sim, t);
+        }
+        assert_eq!(ckpt.num_snapshots(), T / 100);
+        assert_eq!(sim.steps_executed, T, "前向 no_grad：恰好 1× 执行");
+        let init_adj = ckpt.backward(&mut ctx, &mut sim, &loss_fn);
+        assert_eq!(sim.steps_executed, 2 * T, "Uniform 重算恰好再 1× 前向");
+        let mut g = init_adj; // 初始状态（20 维）伴随
+        g.push(ctx.grad(vk).unwrap());
+        g
+    };
+    let seg1 = run_segmented();
+    let seg2 = run_segmented();
+
+    // 判据 (a)：同策略重跑 bit-exact；判据 (b)：分段 vs 全 tape ≤ 1e-10
+    assert_eq!(seg1, seg2, "同策略重跑必须逐位一致（确定性重算）");
+    for (i, (&g_seg, &g_full)) in seg1.iter().zip(grads_full.iter()).enumerate() {
+        let rel = (g_seg - g_full).abs() / (1.0 + g_full.abs());
+        assert!(rel < 1e-10, "coord {i}: segmented {g_seg:.3e} vs full {g_full:.3e}");
+    }
+}

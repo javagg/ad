@@ -200,3 +200,62 @@ fn taylor_test_explicit_direction() {
     let report: TaylorReport = checker.taylor_test(f, &x, &g, Some(&[0.6, 0.8, 0.0]));
     assert!(report.passed);
 }
+
+// ============================================================ 条件数探针
+
+use ad_verify::condition_number_inf;
+
+#[test]
+fn condition_number_diagonal_exact() {
+    // diag(1, 2, 4)：‖A‖∞ = 4，‖A⁻¹‖∞ = 1 → κ∞ = 4
+    let a = vec![vec![1.0, 0.0, 0.0], vec![0.0, 2.0, 0.0], vec![0.0, 0.0, 4.0]];
+    let k = condition_number_inf(&a);
+    assert!((k - 4.0).abs() < 1e-12, "κ∞ = {k}");
+}
+
+#[test]
+fn condition_number_scaled_identity_is_one() {
+    // 缩放不变性：κ∞(αI) = 1（良态），误差按 α² 放大也不改变条件数
+    let a = vec![vec![1e6, 0.0], vec![0.0, 1e-6]];
+    // 注意：κ∞(diag(1e6, 1e-6)) = 1e6 · 1e6 = 1e12（各向异性缩放是病态）
+    let k = condition_number_inf(&a);
+    assert!((k - 1e12).abs() < 1e6, "κ∞ = {k}");
+}
+
+#[test]
+fn condition_number_hilbert_ill_conditioned() {
+    // 4 阶 Hilbert 矩阵的经典病态（2-范数条件数 ≈ 1.55e4，∞-范数同量级）
+    let a: Vec<Vec<f64>> = (0..4)
+        .map(|i| (0..4).map(|j| 1.0 / ((i + j + 1) as f64)).collect())
+        .collect();
+    let k = condition_number_inf(&a);
+    assert!(k > 1e4, "κ∞ = {k} should be large");
+}
+
+#[test]
+fn condition_number_singular_is_infinite() {
+    let a = vec![vec![1.0, 2.0], vec![2.0, 4.0]];
+    assert!(condition_number_inf(&a).is_infinite());
+}
+
+#[test]
+fn condition_number_identity_is_one() {
+    let a = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+    assert!((condition_number_inf(&a) - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn condition_number_matches_direct_inverse() {
+    // 与直接求逆交叉验证：2×2 解析逆
+    let a = vec![vec![3.0, 1.0], vec![1.0, 2.0]];
+    let det = 3.0 * 2.0 - 1.0;
+    let inv = vec![vec![2.0 / det, -1.0 / det], vec![-1.0 / det, 3.0 / det]];
+    let norm = |m: &[Vec<f64>]| {
+        m.iter()
+            .map(|r| r.iter().fold(0.0, |s, &v| s + v.abs()))
+            .fold(0.0, f64::max)
+    };
+    let want = norm(&a) * norm(&inv);
+    let got = condition_number_inf(&a);
+    assert!((got - want).abs() < 1e-9 * want, "{got} vs {want}");
+}

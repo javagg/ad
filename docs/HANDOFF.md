@@ -1,7 +1,9 @@
 # HANDOFF — 项目状态与新 Session 接入指南
 
-> 写于 2026-10-06，同日两次更新。最后一次全量验证：**40 套件全绿**、clippy 零警告、
-> wasm32 编译通过。本文档目标：新 session 零上下文即可继续推进，不丢任何关键决策/陷阱/路径。
+> 写于 2026-10-06，同日多次更新。最后一次全量验证：**40 套件全绿**（新增条件数
+> 探针、matvec、10⁴ 步链场景等约 15 个测试用例，多并入既有套件文件）、
+> clippy 零警告、wasm32 编译通过。本文档目标：新 session 零上下文即可继续推进，
+> 不丢任何关键决策/陷阱/路径。
 
 ## 1. 项目概要
 
@@ -40,7 +42,8 @@ ad-demo    Yew + trunk wasm32 web demo（三面板：标量/单摆checkpoint/IFT
 | `c0c0a2f` | 端到端轨迹优化基准（GD + 接触球） |
 | `abdef4e` | 接触 iLQR 基准 |
 | `972641a` | 火焰图性能工程（M5 收尾）：分配热点消除，分段反向 −51%、分配 −98%；profile 剖析用例 |
-| （本次） | 手写 CustomOp 双关节摆补全（`ad-physics::chain::DoublePendulumStep`）+ iLQR 逐位对拍；文档 v0.3.4 |
+| `9d1e682` | 手写 CustomOp 双关节摆补全（`ad-physics::chain::DoublePendulumStep`）+ iLQR 逐位对拍；文档 v0.3.4 |
+| （本次） | 工具链与场景补全（§12.3 第 28 条）：条件数探针、matvec、**Custom 记录槽位路由潜伏 bug 修复**、记录瘦身（单摆 −59%/−63% 累计）、iLQR LU 多右端、10⁴ 步链场景、§5.4 验收 bench；文档 v0.3.5 |
 
 ## 4. 关键设计决策与陷阱（新 session 必读）
 
@@ -80,6 +83,15 @@ VJP 并先过 FD 隔离器；见 `ad-physics::chain::DoublePendulumStep`。）
 
 ### 4.10 性能注意
 优化循环必须每轮 `clear_tape()`，否则 tape 无限增长退化为 O(n²)。`tape_len()` 探针用于检测。
+iLQR 的 rollout/前向线搜索已改为 Context 跨步复用 + 缓冲区重填；高频 CustomOp 调用
+应缓存 `Rc<dyn CustomOp>` 走 `call_custom_dyn`（`PendulumSim` 是示范）。
+
+### 4.11 Custom 记录的梯度按原始槽位索引（§12.3 第 28b 条，潜伏 bug 教训）
+`CustomOp::backward` 返回的 gins 长度 = `num_inputs`，与**原始槽位**一一对应；
+context 路由必须按 `tracked` 的 slot 取 `gins[slot]`。早期实现用 zip 按位置配对，
+常量输入恰好都在尾部时"碰巧对齐"——`matvec`（M 常量在前、v 在后）首踩：
+λM 被错路由给 λv。**FD 隔离器应包含部分追踪形态用例**（部分输入常量、
+且常量不在尾部）。
 
 ## 5. 测试体系总览（40 套件）
 
@@ -97,13 +109,14 @@ VJP 并先过 FD 隔离器；见 `ad-physics::chain::DoublePendulumStep`。）
 
 ## 6. 下一步（按优先级）
 
-### 6.1 ~~火焰图性能工程（M5 收尾）~~ ✅ 已完成（2026-10-06，§12.3 第 26 条）
+### 6.1 ~~火焰图性能工程（M5 收尾）~~ ✅ 已完成（2026-10-06，§12.3 第 26/28c 条）
 方法论：Windows 无 perf/dtrace、samply 需管理员 → **计数分配器画像 + cdb
 poor-man's profiler**（负载驱动 `cargo run --release -p ad --example profile`，
-`--loop <秒>` 模式供 cdb 采样）。成果：criterion 分段反向 288→141 µs（−51%）、
-全 tape 177→133 µs（−25%）；分配次数 checkpoint 7160→128、全 tape 4016→16。
+`--loop <秒>` 模式供 cdb 采样）。成果：criterion 分段反向 288→**106 µs**（−63%）、
+全 tape 177→**73 µs**（−59%）；分配次数 checkpoint 7160→128、全 tape 4016→16。
 修复：SmallVec 内联 4→8（CustomOp forward/backward、tape Custom 记录）、
-`call_custom` 返回 SmallVec、PendulumSim 缓存 Rc 走 call_custom_dyn。
+`call_custom` 返回 SmallVec、PendulumSim 缓存 Rc 走 call_custom_dyn、
+Custom 记录存连续输出 base（336→272B，反向直传 adjoints 切片）。
 
 ### 6.2 ~~真实铰链多体链（方向 3 手写 CustomOp 补全）~~ ✅ 已完成（2026-10-06，§12.3 第 27 条）
 `ad-physics::chain::DoublePendulumStep`：inputs = [θ1,θ2,ω1,ω2,τ1,τ2,dt]，
@@ -114,13 +127,29 @@ outputs = [θ1',θ2',ω1',ω2']，VJP 按 **M⁻¹ 分解**推导（`s = M⁻¹�
 （重力双角 θ1 依赖漏项 + 内部边 λdt 需用 λω'(总计)）——教训已入算子文档。
 iLQR 对拍测试在 `ad-optim/tests/chain.rs`（ad-optim dev-dep ad-physics）。
 
-### 6.3 CI workflow 恢复（需要用户操作）
+### 6.3 ~~§5.3/§5.4 收尾~~ ✅ 已完成（2026-10-06，§12.3 第 28 条）
+- 条件数探针 `ad_verify::condition_number_inf`（§4.3.3 文档引用兑现）+ ad-custom 接线；
+- `matvec_with` bulk 算子（§4.3.4 M·v 行）——**首踩 Custom 记录槽位路由潜伏 bug**（§4.11）；
+- 10⁴ 步 20 维链 Uniform checkpoint 场景（bit-exact 重跑 + 1e-10 全 tape 对拍 + 重算 1×）；
+- §5.4 验收 bench `chain_step/*`：CustomOp vs 手写伴随递推 ≈ **2.4–3.0×，未达标**，
+  偏差分析入 §12.3 第 28f 条（"最小算子"是该指标最坏情形；bulk 算子比值趋近 1×）。
+
+### 6.4 剩余可推进方向（按价值排序）
+1. **IFT 泛化**（§4.3.3）：矩形残差系统（nr ≠ nx）、warm-start、Newton+SVD——隐式
+   接触求解的完整形态；
+2. **iLQR 能力**：控制 box 约束（投影/钳制前向 pass）、MPC 滚动形态（与 Online
+   checkpoint 组合，§4.4.2 Online 行的承诺场景）；
+3. **f32 路径**：全套件零 f32 覆盖 + §5.1 分级容差标定文档缺失；
+4. **rayon 批量示例**（§4.1.6/§7 承诺，feature-gated）；
+5. **crates.io 发布**（差异化主张值得公开；需 keywords/categories/license 文件）；
+6. **研究性**：经典 Revolve（tape 架构下收益存疑）、GradBench 锚点、OpRecord arena。
+
+### 6.5 CI workflow 恢复（需要用户操作）
 `gh auth refresh -h github.com -s workflow` → 浏览器授权 →
 `git mv .github/ci.yml.pending .github/workflows/ci.yml && git commit && git push`
 
-### 6.4 推送状态
-✅ 已全部推送（2026-10-06）：远端 master = `9d1e682`，包含 `abdef4e`、
-性能工程 `972641a` 与手写双关节摆。工作区干净。
+### 6.6 推送状态
+✅ 已全部推送（2026-10-06）：远端 master 与本地同步。工作区干净。
 
 ## 7. 常用命令
 
@@ -138,7 +167,7 @@ git push                        # 推送（2026-10-06 已同步至 9d1e682+）
 
 | 文件 | 内容 |
 |------|------|
-| `docs/design.md` | 设计文档 v0.3 + §12 实现回写（12.3 有 27 条教训） |
+| `docs/design.md` | 设计文档 v0.3.5 + §12 实现回写（12.3 有 28 条教训） |
 | `docs/design.md` §4.3.1 | CustomOp backward 契约（内部边 + 单步 FD 规范） |
 | `docs/design.md` §12.3 | 实现期偏差与教训（27 条，含全部 bug 复盘） |
 | `crates/ad-core/src/context.rs` | Context 核心（backward_seeds/Jacobian/clip_grad） |

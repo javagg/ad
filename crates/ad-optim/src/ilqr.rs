@@ -109,35 +109,45 @@ fn jacobians<D: Dynamics>(d: &D, x: &[f64], u: &[f64]) -> (Vec<Vec<f64>>, Vec<Ve
 }
 
 /// 沿 (U) 从 x0 rollout，返回逐时刻状态（含 x0，共 T+1）与损失。
+///
+/// 前向为纯数值路径（全部输入常量，tape 不增长）：Context 跨步复用、
+/// 状态/控制缓冲区就地重填——rollout 在求解器内每迭代被调用 2 次，
+/// 每步 Context::new 的分配热点（性能画像 §12.3 第 26 条）在此放大。
 pub fn rollout<D: Dynamics>(
     d: &D,
     x0: &[f64],
     u: &[Vec<f64>],
     cost: &QuadraticCost,
 ) -> (Vec<Vec<f64>>, f64) {
+    let (nx, nu) = (d.nx(), d.nu());
     let t_total = u.len();
-    let mut x = vec![vec![0.0; d.nx()]; t_total + 1];
+    let mut x = vec![vec![0.0; nx]; t_total + 1];
     x[0].copy_from_slice(x0);
     let mut loss = 0.0;
+    let mut ctx = Context::<f64>::new();
+    let mut xv: Vec<AD<f64>> = Vec::with_capacity(nx);
+    let mut uv: Vec<AD<f64>> = Vec::with_capacity(nu);
     for t in 0..t_total {
         // 运行代价（x_t, u_t）
-        for j in 0..d.nx() {
+        for j in 0..nx {
             let dx = x[t][j] - cost.goal[j];
             loss += 0.5 * cost.q[j] * dx * dx;
         }
-        for j in 0..d.nu() {
+        for j in 0..nu {
             loss += 0.5 * cost.r[j] * u[t][j] * u[t][j];
         }
         // 前向（纯数值：以常量 AD 复用 Dynamics::step 表达式）
-        let mut ctx = Context::<f64>::new();
-        let xv: Vec<AD<f64>> = x[t].iter().map(|&v| AD::constant(v)).collect();
-        let uv: Vec<AD<f64>> = u[t].iter().map(|&v| AD::constant(v)).collect();
+        ctx.clear_tape();
+        xv.clear();
+        xv.extend(x[t].iter().map(|&v| AD::constant(v)));
+        uv.clear();
+        uv.extend(u[t].iter().map(|&v| AD::constant(v)));
         let out = d.step(&mut ctx, &xv, &uv);
-        for j in 0..d.nx() {
+        for j in 0..nx {
             x[t + 1][j] = out[j].value;
         }
     }
-    for j in 0..d.nx() {
+    for j in 0..nx {
         let dx = x[t_total][j] - cost.goal[j];
         loss += 0.5 * cost.qf[j] * dx * dx;
     }
@@ -257,25 +267,24 @@ pub fn solve_ilqr<D: Dynamics>(
                 }
             }
 
-            // 正则化求 k, K
+            // 正则化求 k, K：Q_uu_reg 只分解一次，k 与 K 的 nx 列右端
+            // 共享同一 LU（每步 nx+1 次回代，替代此前 nx+1 次 O(n³) 重分解）
             let mut q_uu_reg = q_uu.clone();
             for i in 0..nu {
                 q_uu_reg[i][i] += mu;
             }
-            let Some(kk) = solve_spd(&q_uu_reg, &q_u) else {
+            let Some(lu) = lu_factor(&q_uu_reg) else {
                 backward_ok = false;
                 break;
             };
+            let kk = lu_solve(&lu, &q_u);
             for i in 0..nu {
                 ks[t][i] = -kk[i];
             }
             // K = −Q_uu_reg⁻¹ Q_ux：每列右端
             for j in 0..nx {
                 let rhs: Vec<f64> = (0..nu).map(|i| q_ux[i][j]).collect();
-                let Some(kcol) = solve_spd(&q_uu_reg, &rhs) else {
-                    backward_ok = false;
-                    break;
-                };
+                let kcol = lu_solve(&lu, &rhs);
                 for i in 0..nu {
                     kmat[t][i][j] = -kcol[i];
                 }
@@ -332,6 +341,9 @@ pub fn solve_ilqr<D: Dynamics>(
         // ---- forward pass（α 回溯） ----
         let mut alpha = 1.0f64;
         let mut accepted = false;
+        let mut ctx_fwd = Context::<f64>::new();
+        let mut xv: Vec<AD<f64>> = Vec::with_capacity(nx);
+        let mut uv: Vec<AD<f64>> = Vec::with_capacity(nu);
         while alpha >= 1e-3 {
             let mut u_new = u.clone();
             let mut x_new = vec![vec![0.0; nx]; t_total + 1];
@@ -342,10 +354,12 @@ pub fn solve_ilqr<D: Dynamics>(
                     let k_term: f64 = (0..nx).map(|j| kmat[t][i][j] * dx[j]).sum::<f64>();
                     u_new[t][i] += alpha * ks[t][i] + k_term;
                 }
-                let mut ctx = Context::<f64>::new();
-                let xv: Vec<AD<f64>> = x_new[t].iter().map(|&v| AD::constant(v)).collect();
-                let uv: Vec<AD<f64>> = u_new[t].iter().map(|&v| AD::constant(v)).collect();
-                let out = d.step(&mut ctx, &xv, &uv);
+                ctx_fwd.clear_tape();
+                xv.clear();
+                xv.extend(x_new[t].iter().map(|&v| AD::constant(v)));
+                uv.clear();
+                uv.extend(u_new[t].iter().map(|&v| AD::constant(v)));
+                let out = d.step(&mut ctx_fwd, &xv, &uv);
                 for j in 0..nx {
                     x_new[t + 1][j] = out[j].value;
                 }
@@ -391,36 +405,52 @@ pub fn solve_ilqr<D: Dynamics>(
     )
 }
 
-/// 对称正定（含正则项）线性求解：部分主元 Gaussian 消元；奇异返回 None。
-fn solve_spd(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
-    let n = b.len();
+/// LU 分解（部分主元，就地存 L 下三角于消元块）：奇异主元（< 1e-12）返回 None。
+/// 与旧 solve_spd 的消元次序一致（同一主元选择 + 同序回代），数值结果逐位等价。
+fn lu_factor(a: &[Vec<f64>]) -> Option<(Vec<Vec<f64>>, Vec<usize>)> {
+    let n = a.len();
     let mut m = a.to_vec();
-    let mut y = b.to_vec();
+    let mut perm: Vec<usize> = (0..n).collect();
     for col in 0..n {
         let piv = (col..n)
             .max_by(|&i, &j| m[i][col].abs().partial_cmp(&m[j][col].abs()).unwrap())
             .unwrap_or(col);
         m.swap(col, piv);
-        y.swap(col, piv);
+        perm.swap(col, piv);
         let d = m[col][col];
         if d.abs() < 1e-12 {
             return None;
         }
         for r in col + 1..n {
             let f = m[r][col] / d;
-            for c in col..n {
+            m[r][col] = f; // L 因子
+            for c in col + 1..n {
                 m[r][c] -= f * m[col][c];
             }
-            y[r] -= f * y[col];
         }
+    }
+    Some((m, perm))
+}
+
+/// 解 `LU x = P b`（前代 + 回代）。
+fn lu_solve(lu: &(Vec<Vec<f64>>, Vec<usize>), b: &[f64]) -> Vec<f64> {
+    let (m, perm) = lu;
+    let n = m.len();
+    let mut y = vec![0.0; n];
+    for i in 0..n {
+        let mut s = b[perm[i]];
+        for j in 0..i {
+            s -= m[i][j] * y[j];
+        }
+        y[i] = s;
     }
     let mut x = vec![0.0; n];
     for i in (0..n).rev() {
         let mut s = y[i];
-        for c in i + 1..n {
-            s -= m[i][c] * x[c];
+        for j in i + 1..n {
+            s -= m[i][j] * x[j];
         }
         x[i] = s / m[i][i];
     }
-    Some(x)
+    x
 }

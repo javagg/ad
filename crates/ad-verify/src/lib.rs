@@ -486,3 +486,75 @@ pub struct TaylorReport {
     pub estimated_order: f64,
     pub passed: bool,
 }
+
+// ---- 条件数探针（设计文档 §4.3.3 / §4.5.3：IFT 伴随解的可靠性诊断） ----
+
+/// 无穷范数条件数 `κ∞(A) = ‖A‖∞·‖A⁻¹‖∞`（行主序 n×n）。
+///
+/// 用部分主元 Gauss–Jordan 显式求逆（O(n³)，面向 `ad-custom::linear_solve`
+/// 同级的 n ≲ 数百规模）；主元为 0 或出现非有限值时返回 `f64::INFINITY`
+/// （奇异/数值奇异）。经验判据：κ < 1e8 良态，1e8–1e12 需正则化（如 Tassa μ），
+/// κ 超过 1e12 伴随解基本不可信——与 f64 的机器精度 2.2e-16 对应，κ 超过
+/// 约 1e15 时解的有效位数归零。
+pub fn condition_number_inf(a: &[Vec<f64>]) -> f64 {
+    let n = a.len();
+    debug_assert!(a.iter().all(|row| row.len() == n), "condition_number: not square");
+    if n == 0 {
+        return 1.0;
+    }
+
+    // 增广 [A | I]，Gauss–Jordan 就地求逆
+    let mut m: Vec<Vec<f64>> = (0..n)
+        .map(|i| {
+            let mut row = vec![0.0; 2 * n];
+            row[..n].copy_from_slice(&a[i]);
+            row[n + i] = 1.0;
+            row
+        })
+        .collect();
+
+    for col in 0..n {
+        let piv = (col..n)
+            .max_by(|&i, &j| m[i][col].abs().partial_cmp(&m[j][col].abs()).unwrap())
+            .unwrap_or(col);
+        m.swap(col, piv);
+        let d = m[col][col];
+        if d == 0.0 || !d.is_finite() {
+            return f64::INFINITY;
+        }
+        for c in 0..2 * n {
+            m[col][c] /= d;
+        }
+        for r in 0..n {
+            if r == col {
+                continue;
+            }
+            let f = m[r][col];
+            if f == 0.0 {
+                continue;
+            }
+            for c in 0..2 * n {
+                m[r][c] -= f * m[col][c];
+            }
+        }
+    }
+
+    // ‖A‖∞ 取自原始 a（增广矩阵的 A 块在消元中已被破坏）
+    condition_from_inverse(a, &m, n)
+}
+
+/// 从增广矩阵提取逆块并计算 κ∞（拆出以便测试 ‖A‖∞ 用原始 A）。
+fn condition_from_inverse(a: &[Vec<f64>], inv_aug: &[Vec<f64>], n: usize) -> f64 {
+    let norm_a = a
+        .iter()
+        .map(|row| row.iter().fold(0.0f64, |s, &v| s + v.abs()))
+        .fold(0.0f64, f64::max);
+    let norm_inv = inv_aug
+        .iter()
+        .map(|row| row[n..].iter().fold(0.0f64, |s, &v| s + v.abs()))
+        .fold(0.0f64, f64::max);
+    if !norm_a.is_finite() || !norm_inv.is_finite() {
+        return f64::INFINITY;
+    }
+    norm_a * norm_inv
+}
