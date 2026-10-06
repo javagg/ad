@@ -15,6 +15,7 @@ ad-verify = { workspace = true }
 rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
+ad-optim = { workspace = true }
 smallvec = { workspace = true }
 criterion = "0.5"
 
