@@ -33,9 +33,10 @@ pub struct IlqrCfg {
     /// 期望下降的最低验收比例
     pub accept_ratio: f64,
     pub tol: f64,
-    /// 控制下界（box 约束，None = 无界）。前向 pass 钳制 u_new——backward
-    /// pass 不感知边界（clamped iLQR 启发式）：主动约束期 ΔV 预估偏乐观，
-    /// 由 α 回溯的验收环节兜底（设计文档 §12.3 第 30 条）。
+    /// 控制下界（box 约束，None = 无界）。backward pass 为 control-limited
+    /// 形式（Tassa et al. 2014：投影坐标下降解每步 box-QP，钳制维耦合进入
+    /// 自由维标量解）；前向 pass 钳制 u_new，主动约束期 ΔV 预估仍可能偏乐观，
+    /// 由 α 回溯的验收环节兜底（设计文档 §12.3 第 30/39 条）。
     pub u_min: Option<Vec<f64>>,
     /// 控制上界（与 u_min 等长）
     pub u_max: Option<Vec<f64>>,
@@ -297,21 +298,22 @@ pub fn solve_ilqr<D: Dynamics>(
             if cond > quu_cond_max {
                 quu_cond_max = cond;
             }
-            let Some(lu) = lu_factor(&q_uu_reg) else {
+            // k/K 求解：无界走 LU 精确路径（数值与历史逐位一致）；有界走
+            // control-limited 迭代分解（Tassa et al. 2014，第 30a 条启发式的
+            // 正规化——backward 感知边界，钳制维的耦合进入自由维的标量解）
+            if !solve_kk_boxed(
+                &q_uu,
+                &q_u,
+                &q_ux,
+                &u[t],
+                cfg.u_min.as_deref(),
+                cfg.u_max.as_deref(),
+                mu,
+                &mut ks[t],
+                &mut kmat[t],
+            ) {
                 backward_ok = false;
                 break;
-            };
-            let kk = lu_solve(&lu, &q_u);
-            for i in 0..nu {
-                ks[t][i] = -kk[i];
-            }
-            // K = −Q_uu_reg⁻¹ Q_ux：每列右端
-            for j in 0..nx {
-                let rhs: Vec<f64> = (0..nu).map(|i| q_ux[i][j]).collect();
-                let kcol = lu_solve(&lu, &rhs);
-                for i in 0..nu {
-                    kmat[t][i][j] = -kcol[i];
-                }
             }
             if !backward_ok {
                 break;
@@ -377,7 +379,7 @@ pub fn solve_ilqr<D: Dynamics>(
                     let dx: Vec<f64> = (0..nx).map(|j| x_new[t][j] - x[t][j]).collect();
                     let k_term: f64 = (0..nx).map(|j| kmat[t][i][j] * dx[j]).sum::<f64>();
                     u_new[t][i] += alpha * ks[t][i] + k_term;
-                    // box 约束：前向钳制（clamped iLQR——backward pass 不感知边界）
+                    // box 约束：前向钳制 + control-limited backward（§12.3 第 39 条）
                     if let Some(lo) = &cfg.u_min {
                         if u_new[t][i] < lo[i] {
                             u_new[t][i] = lo[i];
@@ -444,10 +446,124 @@ pub fn solve_ilqr<D: Dynamics>(
     )
 }
 
+/// 单步 k/K 求解（box-DDP，Tassa et al. 2014）。
+///
+/// - **无界**（u_min/u_max 均为 None）：LU 精确路径，数值与历史实现逐位一致；
+/// - **有界**：自由/钳制维迭代分解——k 从 0 起步，逐控制维检查
+///   `u_i + k_i` 是否越界：界内做标量除法解（`k_i = −Q_u_f/i / Q_uu_ii`）
+///   并以 `Δk_i` 更新 `Q_u_f` 的耦合；越界则钳制 `k_i` 到界并标记维。
+///   维集合稳定且 k 收敛后，K 的钳制行置零、自由行由自由子块的 LU 给出
+///   （`K_free = −Q_uu_ff⁻¹ Q_ux_f`）。正则化 μ 已含在传入的 q_uu 中？
+///   否——本函数内部加 μ（与调用方的条件数探针共享同一 reg 值）。
+///
+/// 返回 false = 数值失败（主元奇异），调用方升级 μ 重试。
+#[allow(clippy::too_many_arguments)]
+fn solve_kk_boxed(
+    q_uu: &[Vec<f64>],
+    q_u: &[f64],
+    q_ux: &[Vec<f64>],
+    u: &[f64],
+    u_min: Option<&[f64]>,
+    u_max: Option<&[f64]>,
+    mu: f64,
+    ks_out: &mut [f64],
+    kmat_out: &mut [Vec<f64>],
+) -> bool {
+    let nu = q_u.len();
+    let nx = if kmat_out.is_empty() { 0 } else { kmat_out[0].len() };
+    let mut q_uu_reg = q_uu.to_vec();
+    for i in 0..nu {
+        q_uu_reg[i][i] += mu;
+    }
+
+    let (Some(lo), Some(hi)) = (u_min, u_max) else {
+        let Some(lu) = lu_factor(&q_uu_reg) else {
+            return false;
+        };
+        let kk = lu_solve(&lu, q_u);
+        for i in 0..nu {
+            ks_out[i] = -kk[i];
+        }
+        for j in 0..nx {
+            let rhs: Vec<f64> = (0..nu).map(|i| q_ux[i][j]).collect();
+            let kcol = lu_solve(&lu, &rhs);
+            for i in 0..nu {
+                kmat_out[i][j] = -kcol[i];
+            }
+        }
+        return true;
+    };
+
+    // ---- control-limited：投影坐标下降（box-QP，Quu_reg ≽ 0 保证收敛）----
+    // 维护增量形式 qu_f = Q_u + Q_uu_reg·k；沿第 i 维的无约束极小
+    // k_i^unc = k_i − qu_f_i/Q_uu_ii，越界则投影到界。收敛后以"处于界上"
+    // 的维划分自由/钳制集。
+    let mut k = vec![0.0f64; nu];
+    let mut qu_f: Vec<f64> = q_u.to_vec();
+    for _ in 0..(6 * nu + 6) {
+        let mut max_dk = 0.0f64;
+        for i in 0..nu {
+            let k_unc = k[i] - qu_f[i] / q_uu_reg[i][i];
+            let u_cand = u[i] + k_unc;
+            let k_new = if u_cand < lo[i] {
+                lo[i] - u[i]
+            } else if u_cand > hi[i] {
+                hi[i] - u[i]
+            } else {
+                k_unc
+            };
+            let delta = k_new - k[i];
+            if delta != 0.0 {
+                for r in 0..nu {
+                    qu_f[r] += q_uu_reg[r][i] * delta;
+                }
+                k[i] = k_new;
+                let ad = delta.abs();
+                if ad > max_dk {
+                    max_dk = ad;
+                }
+            }
+        }
+        if max_dk < 1e-10 {
+            break;
+        }
+    }
+
+    for i in 0..nu {
+        ks_out[i] = k[i];
+        for j in 0..nx {
+            kmat_out[i][j] = 0.0;
+        }
+    }
+
+    // K：自由行（未处于界上的维）= −Q_uu_ff⁻¹ Q_ux_f（保留 μ 正则的自由子块）；
+    // 钳制行零
+    let free: Vec<usize> = (0..nu)
+        .filter(|&i| ((u[i] + k[i]) - lo[i]).abs() > 1e-9 && ((u[i] + k[i]) - hi[i]).abs() > 1e-9)
+        .collect();
+    if free.is_empty() {
+        return true;
+    }
+    let nf = free.len();
+    let a: Vec<Vec<f64>> = (0..nf)
+        .map(|p| (0..nf).map(|q| q_uu_reg[free[p]][free[q]]).collect())
+        .collect();
+    let Some(lu) = lu_factor(&a) else {
+        return false;
+    };
+    for j in 0..nx {
+        let rhs: Vec<f64> = free.iter().map(|&i| q_ux[i][j]).collect();
+        let kcol = lu_solve(&lu, &rhs);
+        for (p, &i) in free.iter().enumerate() {
+            kmat_out[i][j] = -kcol[p];
+        }
+    }
+    true
+}
+
 /// LU 分解（部分主元，就地存 L 下三角于消元块）：奇异主元（< 1e-12）返回 None。
 /// 与旧 solve_spd 的消元次序一致（同一主元选择 + 同序回代），数值结果逐位等价。
-fn lu_factor(a: &[Vec<f64>]) -> Option<(Vec<Vec<f64>>, Vec<usize>)> {
-    let n = a.len();
+fn lu_factor(a: &[Vec<f64>]) -> Option<(Vec<Vec<f64>>, Vec<usize>)> {    let n = a.len();
     let mut m = a.to_vec();
     let mut perm: Vec<usize> = (0..n).collect();
     for col in 0..n {

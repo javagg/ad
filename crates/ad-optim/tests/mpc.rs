@@ -128,3 +128,87 @@ fn mpc_receding_horizon_reaches_goal_under_bounds() {
     assert!(err_p < 0.05, "位置误差 {err_p}");
     assert!(err_v < 0.05, "速度误差 {err_v}");
 }
+
+// ============================================================ box-DDP 专项（§12.3 第 39 条）
+
+/// control-limited backward pass 的三个性质：松界 ≈ 无界、损失随界宽
+/// 单调不降、主动约束饱和到界。全部用双积分器（线性动力学 + 二次代价，
+/// 真解可由凸 QP 直觉仲裁）。
+#[test]
+fn boxddp_properties() {
+    let d = DoubleIntegrator { dt: 0.1 };
+    let t_total = 20;
+    let x0 = [0.0, 0.6];
+    let c = cost([0.0, 0.0], 1.0);
+    let u0: Vec<Vec<f64>> = (0..t_total).map(|_| vec![0.05]).collect();
+    let cfg_free = IlqrCfg {
+        max_iters: 80,
+        ..Default::default()
+    };
+
+    // 1. 松界 ≈ 无界（约束不激活时 box 路径退化为经典解）
+    let (u_free, rep_free) = solve_ilqr(&d, &x0, &u0, &c, &cfg_free);
+    let peak = u_free.iter().map(|ui| ui[0].abs()).fold(0.0f64, f64::max);
+    let cfg_loose = IlqrCfg {
+        max_iters: 80,
+        u_min: Some(vec![-100.0]),
+        u_max: Some(vec![100.0]),
+        ..Default::default()
+    };
+    let (_u_loose, rep_loose) = solve_ilqr(&d, &x0, &u0, &c, &cfg_loose);
+    eprintln!(
+        "松界 vs 无界：{} vs {}（peak |u| = {peak:.4}）",
+        rep_loose.loss, rep_free.loss
+    );
+    assert!(
+        (rep_loose.loss - rep_free.loss).abs() < 1e-6 * (1.0 + rep_free.loss),
+        "松界应复现无界最优"
+    );
+
+    // 2. 损失随界宽单调不降（可行域缩小 → 最优值不降）
+    let mut losses = Vec::new();
+    for frac in [1.0f64, 0.6, 0.3] {
+        let b = frac * peak;
+        let cfg_b = IlqrCfg {
+            max_iters: 80,
+            u_min: Some(vec![-b]),
+            u_max: Some(vec![b]),
+            ..Default::default()
+        };
+        let (u_b, rep_b) = solve_ilqr(&d, &x0, &u0, &c, &cfg_b);
+        assert!(
+            u_b.iter().all(|ui| ui[0] >= -b - 1e-9 && ui[0] <= b + 1e-9),
+            "frac={frac}: 越界"
+        );
+        losses.push(rep_b.loss);
+    }
+    eprintln!("界宽 100%/60%/30% 的损失：{losses:?}");
+    for w in losses.windows(2) {
+        assert!(
+            w[1] >= w[0] - 1e-9,
+            "界收紧后损失应不降：{losses:?}"
+        );
+    }
+
+    // 3. 60% 界下 active-set 饱和：至少一步控制精确落在界上
+    let b = 0.6 * peak;
+    let cfg_b = IlqrCfg {
+        max_iters: 80,
+        u_min: Some(vec![-b]),
+        u_max: Some(vec![b]),
+        ..Default::default()
+    };
+    let (u_b, rep_b) = solve_ilqr(&d, &x0, &u0, &c, &cfg_b);
+    let n_saturated = u_b
+        .iter()
+        .filter(|ui| ((ui[0].abs() - b) / (1.0 + b)).abs() < 1e-9)
+        .count();
+    eprintln!(
+        "60% 界：饱和步数 = {n_saturated}/{}，loss = {}（无界 {}）",
+        u_b.len(),
+        rep_b.loss,
+        rep_free.loss
+    );
+    assert!(n_saturated >= 1, "60% 界下应有饱和步");
+    assert!(rep_b.loss >= rep_free.loss - 1e-9);
+}

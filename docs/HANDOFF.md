@@ -46,6 +46,7 @@ ad-demo    Yew + trunk wasm32 web demo（三面板：标量/单摆checkpoint/IFT
 | （本次 3） | 体系闭环（§12.3 第 33–36 条）：CustomOp 公开验证器、接触 IFT active-set 模式、健康度接入优化器（κ/μ/拒收计数 + GD 健康度画像）、CustomOp 随机图 fuzz；文档 v0.3.7 |
 | （本次 4） | 规模实证（scale_stress，4000 维 × 10⁴ 步 0.93 s / 37.9 MiB）+ 用户教程 docs/guide.md；文档 v0.3.8 |
 | （本次 5） | f32 物理算子泛型化（DoublePendulumStep + GyroscopicStep，f32/f64 对拍 + f32 能量守恒漂移 3.8e-3）；文档 v0.3.9 |
+| （本次 6） | box-DDP control-limited backward pass（solve_kk_boxed，投影坐标下降；松界逐位等价 / 界宽单调 / 饱和断言）；文档 v0.4.0 |
 | （本次） | 工具链与场景补全（§12.3 第 28 条）：条件数探针、matvec、**Custom 记录槽位路由潜伏 bug 修复**、记录瘦身（单摆 −59%/−63% 累计）、iLQR LU 多右端、10⁴ 步链场景、§5.4 验收 bench；文档 v0.3.5 |
 
 ## 4. 关键设计决策与陷阱（新 session 必读）
@@ -154,7 +155,7 @@ f32 标定（`f32.rs` + §5.1 表）、rayon 批量示例（`batch_rollout.rs`�
 4. ~~CustomOp 随机图 fuzz~~ ✅ 3 算子 × 24 步随机 DAG × 512 例 vs 双数 oracle，
    部分追踪形态 + 先规划后执行 + 值模拟缩放防对消（`fuzz_custom.rs`）。
 
-**仍开放的方向**：crates.io 发布（用户指示暂缓）；box-DDP（逐步 QP）；接触、空间代数
+**仍开放的方向**：crates.io 发布（用户指示暂缓）；~~box-DDP~~ ✅ control-limited backward pass（第 39 条）；接触、空间代数
 算子的 f32 泛型化（已有 2 个示范，第 38 条）+ op_check f32 版；OpRecord arena（压 CustomOp 框架开销 2.4–3.0×）；
 经典 Revolve / GradBench（研究性）。
 
@@ -170,10 +171,12 @@ f32 标定（`f32.rs` + §5.1 表）、rayon 批量示例（`batch_rollout.rs`�
 ### 6.5 CI workflow 恢复（需要用户操作）
 `gh auth refresh -h github.com -s workflow` → 浏览器授权 →
 `git mv .github/ci.yml.pending .github/workflows/ci.yml && git commit && git push`
-
 ### 6.6 推送状态
-⏳ **待推送**：`4b0806e`（体系闭环 33–36）、`7d979f2`、`cad0ef3`（规模实证 +
-教程，第 37 条）因网络中断（连接被重置，2026-10-06 晚）滞留本地——网络恢复后
+⏳ **待推送**：自 `4b0806e`（体系闭环 33–36）起共 6 个提交因 GitHub 网络中断
+（连接重置/超时，2026-10-06 晚）滞留本地——网络恢复后 `git push`。
+此前提交（至 `8e12fce`）均已推送。工作区干净。
+
+## 7. 常用命令
 `git push`（本地领先远端 3 提交）。此前提交（至 `8e12fce`）均已推送。工作区干净。
 
 ## 7. 常用命令
