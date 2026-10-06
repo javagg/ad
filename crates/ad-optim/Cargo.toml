@@ -11,6 +11,7 @@ ad-core = { workspace = true }
 
 [dev-dependencies]
 ad-verify = { workspace = true }
+ad-physics = { workspace = true }
 ad = { workspace = true }
 
 [lints]

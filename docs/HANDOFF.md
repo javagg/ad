@@ -1,7 +1,7 @@
 # HANDOFF — 项目状态与新 Session 接入指南
 
-> 写于 2026-10-06，最后一次全量验证：39 套件全绿、clippy 零警告、wasm32 编译通过。
-> 本文档目标：新 session 零上下文即可继续推进，不丢任何关键决策/陷阱/路径。
+> 写于 2026-10-06，同日两次更新。最后一次全量验证：**40 套件全绿**、clippy 零警告、
+> wasm32 编译通过。本文档目标：新 session 零上下文即可继续推进，不丢任何关键决策/陷阱/路径。
 
 ## 1. 项目概要
 
@@ -38,7 +38,9 @@ ad-demo    Yew + trunk wasm32 web demo（三面板：标量/单摆checkpoint/IFT
 | `ab11864` | 平滑接触模型套件 |
 | `f8430f8` | iLQR 求解器 |
 | `c0c0a2f` | 端到端轨迹优化基准（GD + 接触球） |
-| `abdef4e` | 接触 iLQR 基准（最新，**待推送**——网络中断） |
+| `abdef4e` | 接触 iLQR 基准 |
+| `972641a` | 火焰图性能工程（M5 收尾）：分配热点消除，分段反向 −51%、分配 −98%；profile 剖析用例 |
+| （本次） | 手写 CustomOp 双关节摆补全（`ad-physics::chain::DoublePendulumStep`）+ iLQR 逐位对拍；文档 v0.3.4 |
 
 ## 4. 关键设计决策与陷阱（新 session 必读）
 
@@ -68,6 +70,8 @@ FD 隔离器的 loss（如 `loss_of_out`）与 AD 路径的 loss 表达式必须
 ### 4.8 手写 VJP 的工程结论（§12.3 第 24 条）
 三角耦合 + 多处参数依赖的动力学算子（双关节摆）手写 VJP 修正成本远超预期（6+ 处错误）。
 **工程结论**：此复杂度级别优先 AD 直通；手写 CustomOp 保留给 O(n²)+ bulk 操作。
+（2026-10-06 更新：第 27 条修正——手写版**可行**，前提是按 M⁻¹ 中间量分解推导
+VJP 并先过 FD 隔离器；见 `ad-physics::chain::DoublePendulumStep`。）
 已被此管线抓出的 bug 类型：vee 符号、Coriolis 项放错方程、重力二角漏项、内部边耦合、λ 路由、透传输出 λ。
 
 ### 4.9 iLQR 的接触局部性
@@ -77,7 +81,7 @@ FD 隔离器的 loss（如 `loss_of_out`）与 AD 路径的 loss 表达式必须
 ### 4.10 性能注意
 优化循环必须每轮 `clear_tape()`，否则 tape 无限增长退化为 O(n²)。`tape_len()` 探针用于检测。
 
-## 5. 测试体系总览（39 套件）
+## 5. 测试体系总览（40 套件）
 
 | 层级 | 位置 | 方法 |
 |------|------|------|
@@ -93,54 +97,57 @@ FD 隔离器的 loss（如 `loss_of_out`）与 AD 路径的 loss 表达式必须
 
 ## 6. 下一步（按优先级）
 
-### 6.1 火焰图性能工程（M5 收尾）
-```bash
-cargo install flamegraph
-cargo flamegraph --bench ad_bench -- --warm-up-time 1
-# 或 perf record -g cargo bench -p ad
-```
-目标：定位 tape 记录分配 / SmallVec 溢出 / HashMap 查找热点。
-已知性能基线：标量表达式 fresh ~1.0 µs / 复用+clear_tape ~0.4 µs；1000 步单摆分段反向 ~1.0 ms。
-潜在优化点：OpRecord arena 分配器、Tape Vec 预分配、backward HashMap→Vec 索引。
+### 6.1 ~~火焰图性能工程（M5 收尾）~~ ✅ 已完成（2026-10-06，§12.3 第 26 条）
+方法论：Windows 无 perf/dtrace、samply 需管理员 → **计数分配器画像 + cdb
+poor-man's profiler**（负载驱动 `cargo run --release -p ad --example profile`，
+`--loop <秒>` 模式供 cdb 采样）。成果：criterion 分段反向 288→141 µs（−51%）、
+全 tape 177→133 µs（−25%）；分配次数 checkpoint 7160→128、全 tape 4016→16。
+修复：SmallVec 内联 4→8（CustomOp forward/backward、tape Custom 记录）、
+`call_custom` 返回 SmallVec、PendulumSim 缓存 Rc 走 call_custom_dyn。
 
-### 6.2 真实铰链多体链（方向 3 手写 CustomOp 补全）
-当前：双关节摆已用 AD 直通实现（`ad-optim/tests/chain.rs` 的 `step_ad`），
-公式（M/c/g + 2×2 解析逆）已由能量守恒验证正确。
-手写 CustomOp 版可从 `step_ad` 机械翻译：每个 ctx 调用 → 手写 forward + 对应 VJP 项。
-FD 隔离器（`check_op` 模式）+ 能量守恒先验已就绪，可直接复用。
-注意 §4.1 内部边 + §4.6 对称打包 + §4.7 vee 符号三个陷阱。
-空间代数算子（Plucker/Inertia/So3Exp）在 `ad-physics::ops` 中已验证，可选用。
+### 6.2 ~~真实铰链多体链（方向 3 手写 CustomOp 补全）~~ ✅ 已完成（2026-10-06，§12.3 第 27 条）
+`ad-physics::chain::DoublePendulumStep`：inputs = [θ1,θ2,ω1,ω2,τ1,τ2,dt]，
+outputs = [θ1',θ2',ω1',ω2']，VJP 按 **M⁻¹ 分解**推导（`s = M⁻¹λa`、`λr = s`、
+`λM_ij = −s_i·a_j` 全和约定）。四层验证全过：FD 隔离器（4 状态）、能量守恒
+（漂移 0.38%）、单步梯度/Jacobian 对拍 AD 直通（1e-9）、iLQR 甩摆基准
+**逐位一致**（loss 2.7839→1.573964，7 迭代）。隔离器首跑抓出 2 处错误
+（重力双角 θ1 依赖漏项 + 内部边 λdt 需用 λω'(总计)）——教训已入算子文档。
+iLQR 对拍测试在 `ad-optim/tests/chain.rs`（ad-optim dev-dep ad-physics）。
 
 ### 6.3 CI workflow 恢复（需要用户操作）
 `gh auth refresh -h github.com -s workflow` → 浏览器授权 →
 `git mv .github/ci.yml.pending .github/workflows/ci.yml && git commit && git push`
 
 ### 6.4 推送待办
-最新提交 `abdef4e`（接触 iLQR）因网络中断未推送。网络恢复后 `git push`。
+最新提交（手写 CustomOp 双关节摆 + 文档）与此前 `abdef4e`、`972641a` 均在本地
+master，网络恢复后 `git push`。
 
 ## 7. 常用命令
 
 ```bash
-cargo test --workspace          # 39 套件全绿
+cargo test --workspace          # 40 套件全绿
 cargo bench -p ad               # criterion 基准
 cargo clippy --workspace --all-targets  # 零警告
 cargo check --workspace --target wasm32-unknown-unknown
+cargo run --release -p ad --example profile  # 分配画像 + 墙钟（--loop N 供 cdb 采样）
 cd crates/ad-demo && trunk serve  # web demo → localhost:8080
-git push                        # 推送（最新 abdef4e 待推）
+git push                        # 推送（本地领先远端 3+ 提交）
 ```
 
 ## 8. 文件路径速查
 
 | 文件 | 内容 |
 |------|------|
-| `docs/design.md` | 设计文档 v0.3 + §12 实现回写（12.3 有 25 条教训） |
+| `docs/design.md` | 设计文档 v0.3 + §12 实现回写（12.3 有 27 条教训） |
 | `docs/design.md` §4.3.1 | CustomOp backward 契约（内部边 + 单步 FD 规范） |
-| `docs/design.md` §12.3 | 实现期偏差与教训（25 条，含全部 bug 复盘） |
+| `docs/design.md` §12.3 | 实现期偏差与教训（27 条，含全部 bug 复盘） |
 | `crates/ad-core/src/context.rs` | Context 核心（backward_seeds/Jacobian/clip_grad） |
 | `crates/ad-physics/src/ops.rs` | 6 个空间代数 CustomOp |
 | `crates/ad-physics/src/contact.rs` | 接触力 CustomOp |
+| `crates/ad-physics/src/chain.rs` | 手写 CustomOp 双关节摆（M⁻¹ 分解 VJP） |
+| `crates/ad/examples/profile.rs` | 性能剖析用例（分配画像 + `--loop` 采样模式） |
 | `crates/ad-physics/tests/ops_fd.rs` | FD 隔离器参考实现（新算子照此写） |
 | `crates/ad-optim/src/ilqr.rs` | iLQR 求解器 |
 | `crates/ad-optim/tests/e2e.rs` | 端到端收敛基准（GD + 接触 iLQR） |
-| `crates/ad-optim/tests/chain.rs` | 双关节摆直通动力学 + 能量守恒 + iLQR |
+| `crates/ad-optim/tests/chain.rs` | 双关节摆直通动力学 + 能量守恒 + iLQR + 手写算子对拍 |
 | `crates/ad-checkpoint/src/manager.rs` | 嵌套反转实现（reverse_window 递归） |

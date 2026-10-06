@@ -7,11 +7,13 @@
 //! 约定见 [`spatial`] 模块文档：运动向量 `[ω, v]`、力向量 `[n, f]`、
 //! 惯性三元组 `([Ī], m, c)`、旋转行主序 3×3。
 
+pub mod chain;
 pub mod contact;
 pub mod gyro;
 pub mod ops;
 pub mod spatial;
 
+pub use chain::DoublePendulumStep;
 pub use contact::{ContactNormalOp, RegularizedFrictionOp};
 pub use gyro::GyroscopicStep;
 pub use ops::{
