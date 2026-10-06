@@ -5,7 +5,10 @@
 //! 确保 VJP 的每个输出通道都被覆盖。
 
 use ad_core::{Context, CustomOp, AD};
+use std::rc::Rc;
+
 use ad_physics::spatial;
+use ad_physics::{chain::DoublePendulumStep, ContactNormalOp, RegularizedFrictionOp, GyroscopicStep};
 use ad_physics::{
     InertiaApply, PluckerForce, PluckerMotion, RotateInertia, So3Exp, SpatialCrossMotion,
 };
@@ -190,4 +193,50 @@ fn so3_exp_small_angle_continuity() {
             "branch continuity: {small:?} vs {mid:?}"
         );
     }
+}
+
+// ============================================================ 公开验证器（§12.3 第 33 条）
+//
+// `ad_verify::op_check::validate_custom_op` 一行调用：前向确定性 + VJP 契约 +
+// 四种追踪形态逐坐标 FD 对拍——库自己的空间代数算子必须全数通过。
+
+use ad_verify::op_check::validate_custom_op;
+
+fn expect_pass(name: &str, op: Rc<dyn CustomOp<f64>>, points: &[Vec<f64>]) {
+    let report = validate_custom_op(op, points, 1e-5);
+    assert!(report.passed, "{name}: {}", report);
+}
+
+#[test]
+fn validator_passes_all_library_ops() {
+    let e = spatial::so3_exp(&[0.3, -0.8, 0.5]);
+    let pts = |n: usize| -> Vec<Vec<f64>> {
+        let mut rng = ad_verify::Rng::new(42);
+        (0..2)
+            .map(|_| (0..n).map(|_| 0.4 + 0.5 * rng.next_f64() - 0.2).collect())
+            .collect()
+    };
+    expect_pass("spatial_cross_motion", Rc::new(SpatialCrossMotion), &pts(12));
+    expect_pass("inertia_apply", Rc::new(InertiaApply), &pts(16));
+    expect_pass("so3_exp", Rc::new(So3Exp), &pts(3));
+    expect_pass("gyroscopic_step", Rc::new(GyroscopicStep), &pts(7));
+    expect_pass("contact_normal", Rc::new(ContactNormalOp), &pts(6));
+    expect_pass("regularized_friction", Rc::new(RegularizedFrictionOp), &pts(5));
+    expect_pass(
+        "double_pendulum_step",
+        Rc::new(DoublePendulumStep::default()),
+        &pts(7),
+    );
+    // PluckerMotion / PluckerForce / RotateInertia 的输入含旋转矩阵（定义域受限），
+    // 自动点会落在非正交矩阵上——传入合法点集
+    expect_pass(
+        "plucker_motion",
+        Rc::new(PluckerMotion),
+        &[[
+            e.as_slice(),
+            &[0.4, -0.3, 0.9],
+            &[0.7, 0.2, -1.1, 0.5, 0.3, -0.4],
+        ]
+        .concat()],
+    );
 }

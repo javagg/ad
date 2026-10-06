@@ -1,8 +1,8 @@
 # HANDOFF — 项目状态与新 Session 接入指南
 
-> 写于 2026-10-06，同日多次更新。最后一次全量验证：**43 套件全绿**、clippy 零
-> 警告（含 rayon feature）、wasm32 编译通过。本文档目标：新 session 零上下文
-> 即可继续推进，不丢任何关键决策/陷阱/路径。
+> 写于 2026-10-06，同日多次更新。最后一次全量验证：**47 套件全绿**、clippy 零
+> 警告、wasm32 编译通过。本文档目标：新 session 零上下文即可继续推进，
+> 不丢任何关键决策/陷阱/路径。
 
 ## 1. 项目概要
 
@@ -43,6 +43,7 @@ ad-demo    Yew + trunk wasm32 web demo（三面板：标量/单摆checkpoint/IFT
 | `972641a` | 火焰图性能工程（M5 收尾）：分配热点消除，分段反向 −51%、分配 −98%；profile 剖析用例 |
 | `9d1e682` | 手写 CustomOp 双关节摆补全（`ad-physics::chain::DoublePendulumStep`）+ iLQR 逐位对拍；文档 v0.3.4 |
 | （本次 2） | IFT 泛化（矩形残差/warm-start/欠定拒绝，第 29 条）、iLQR box 约束 + MPC 滚动（第 30 条）、f32 标定（第 31 条）、rayon 批量示例（第 32 条）；文档 v0.3.6 |
+| （本次 3） | 体系闭环（§12.3 第 33–36 条）：CustomOp 公开验证器、接触 IFT active-set 模式、健康度接入优化器（κ/μ/拒收计数 + GD 健康度画像）、CustomOp 随机图 fuzz；文档 v0.3.7 |
 | （本次） | 工具链与场景补全（§12.3 第 28 条）：条件数探针、matvec、**Custom 记录槽位路由潜伏 bug 修复**、记录瘦身（单摆 −59%/−63% 累计）、iLQR LU 多右端、10⁴ 步链场景、§5.4 验收 bench；文档 v0.3.5 |
 
 ## 4. 关键设计决策与陷阱（新 session 必读）
@@ -134,17 +135,26 @@ iLQR 对拍测试在 `ad-optim/tests/chain.rs`（ad-optim dev-dep ad-physics）�
 - §5.4 验收 bench `chain_step/*`：CustomOp vs 手写伴随递推 ≈ **2.4–3.0×，未达标**，
   偏差分析入 §12.3 第 28f 条（"最小算子"是该指标最坏情形；bulk 算子比值趋近 1×）。
 
-### 6.4 ~~剩余可推进方向~~ ✅ 1–4 已完成（2026-10-06，§12.3 第 29–32 条）
-1. ~~IFT 泛化~~ ✅ 超定正规方程 + 最小范数伴随、warm-start 显式槽位（x0 梯度
-   恒 0 但决定迭代路径——checkpoint 安全形态）、欠定显式拒绝、`jacobian_x`
-   公开接条件数探针（第 29 条，测试 `ad-custom/tests/ift_rect.rs`）；
-2. ~~iLQR box 约束 + MPC~~ ✅ clamped iLQR（前向钳制 + 自标定测试）+ 滚动
-   时域 MPC（第 30 条，测试 `ad-optim/tests/mpc.rs`）；
-3. ~~f32 路径~~ ✅ 同一泛型算子表 f64/f32 同点对拍 + §5.1 标定表（1e-4 相对，
-   第 31 条，测试 `ad-ops/tests/f32.rs`）；
-4. ~~rayon 批量示例~~ ✅ `examples/batch_rollout.rs`（feature `rayon` 门控，
-   576 任务 × 1000 步 7.4 ms，第 32 条）；
-5. **crates.io 发布**（用户指示暂缓）；
+### 6.4 ~~剩余方向盘点~~ ✅ 全部落地（2026-10-06 两轮，§12.3 第 29–36 条）
+
+**第一轮（第 29–32 条）**：IFT 泛化（超定正规方程 + warm-start 显式槽位 + 欠定
+拒绝，`ad-custom/tests/ift_rect.rs`）、iLQR box 约束 + MPC 滚动（`mpc.rs`）、
+f32 标定（`f32.rs` + §5.1 表）、rayon 批量示例（`batch_rollout.rs`）。
+
+**第二轮（第 33–36 条，体系闭环）**：
+1. ~~CustomOp 公开验证器~~ ✅ `ad_verify::op_check::validate_custom_op`——一行
+   调用：前向确定性 + gins 契约 + 四种追踪形态 FD 对拍；库内 7 算子全过，
+   三类人为破坏全被抓（`ad-verify/tests/op_check.rs`）；
+2. ~~接触 IFT~~ ✅ active-set 模式（1-DOF Hertz 接触 / 2×2 冲量 / 3×2 冗余超定 /
+   warm-start λ 跨步），oracle = 对求解器本身 FD（`contact_ift.rs`）；
+3. ~~健康度接入优化器~~ ✅ iLQR `quu_cond_max`/`mu_final`/`line_search_rejections`
+   + GD `grad_health`；冗余双控制 R 扫描 κ 增长验证（`health.rs`）；
+4. ~~CustomOp 随机图 fuzz~~ ✅ 3 算子 × 24 步随机 DAG × 512 例 vs 双数 oracle，
+   部分追踪形态 + 先规划后执行 + 值模拟缩放防对消（`fuzz_custom.rs`）。
+
+**仍开放的方向**：crates.io 发布（用户指示暂缓）；box-DDP（逐步 QP）；f32 物理
+算子泛型化；OpRecord arena（压 CustomOp 框架开销 2.4–3.0×）；规模实证
+（10³–10⁴ DOF 压力测试）；用户侧集成教程；经典 Revolve / GradBench（研究性）。
 6. **后续**：box-DDP（逐步 QP）、f32 物理算子泛型化、OpRecord arena、
    经典 Revolve / GradBench（研究性）。
 

@@ -7,9 +7,15 @@
 //! - [`GradientChecker::check_differentiability`]：∇Fuzz 式邻居采样，区分
 //!   "梯度算错"与"该点本身不可微"（设计文档 §4.5.2）。
 //!
+//! `CustomOp` 契约验证器（§4.3.1 / §12.3 第 33 条）：[`op_check::validate_custom_op`]
+//! 一行调用完成 前向确定性 + VJP 契约 + 四种追踪形态逐坐标 FD 对拍。
+//!
 //! 内部随机数使用确定性 xorshift（可复现，无外部依赖）。
 
+pub mod op_check;
+
 /// 中心差分梯度验证器。
+
 #[derive(Clone, Debug)]
 pub struct GradientChecker {
     /// 差分步长（f64 推荐 ~1e-6）

@@ -56,6 +56,9 @@ pub struct OptReport {
     /// 线搜索彻底失败（Armijo 拒绝一切步长）的迭代次数。
     /// 持续 > 8 次即停止——通常是梯度与损失不一致（AD 坏梯度的特征信号）。
     pub line_search_failures: usize,
+    /// 终止时梯度的健康度画像（范数 / 零占比 / 非有限占比——§4.5.3，
+    /// 把"梯度健康度"接进优化器输出，§12.3 第 35 条）
+    pub grad_health: ad_verify::GradientHealth,
 }
 
 /// 梯度下降 + Armijo 回溯线搜索。
@@ -134,6 +137,7 @@ where
             grad_norm: norm,
             converged,
             line_search_failures: failures,
+            grad_health: ad_verify::GradientChecker::default().analyze_health(&g),
         },
     )
 }

@@ -31,6 +31,7 @@ name = "ad-core"
 version = "0.1.0"
 dependencies = [
  "ad-ops",
+ "ad-verify",
  "num-traits",
  "proptest",
  "smallvec",
@@ -93,6 +94,7 @@ name = "ad-verify"
 version = "0.1.0"
 dependencies = [
  "ad-core",
+ "smallvec",
 ]
 
 [[package]]

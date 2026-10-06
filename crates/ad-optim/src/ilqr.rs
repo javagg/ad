@@ -78,6 +78,15 @@ pub struct IlqrReport {
     pub converged: bool,
     /// 末次前向线搜索的 α
     pub last_alpha: f64,
+    /// 退出时的 Q_uu 正则化强度 μ——被推到 `mu_max` 附近而收敛失败时，
+    /// 通常是病态/混沌问题（梯度健康但问题难）的信号（§12.3 第 35 条）
+    pub mu_final: f64,
+    /// 前向线搜索的 α 拒收总次数——与 μ 升级互相印证的"实际下降 ≠ 预期下降"
+    /// 信号（混沌接触问题的特征）
+    pub line_search_rejections: usize,
+    /// 全部时间步上 `κ∞(Q_uu_reg)` 的最大值（条件数探针，§12.3 第 28a 条）。
+    /// Q_uu 病态 = 控制通道的有效二阶信息病态；inf 表示某步奇异（触发 μ 升级）。
+    pub quu_cond_max: f64,
 }
 
 /// 在 (x, u) 处计算动力学 Jacobian：A[i][j] = ∂out_i/∂x_j，B[i][j] = ∂out_i/∂u_j。
@@ -184,6 +193,8 @@ pub fn solve_ilqr<D: Dynamics>(
     let mut iters = 0usize;
     let mut converged = false;
     let mut last_alpha = 0.0;
+    let mut line_search_rejections = 0usize;
+    let mut quu_cond_max = 0.0f64;
 
     for _ in 0..cfg.max_iters {
         if converged {
@@ -280,6 +291,11 @@ pub fn solve_ilqr<D: Dynamics>(
             let mut q_uu_reg = q_uu.clone();
             for i in 0..nu {
                 q_uu_reg[i][i] += mu;
+            }
+            // 健康度探针：控制通道二阶信息的条件数（报告取全程最大值）
+            let cond = ad_verify::condition_number_inf(&q_uu_reg);
+            if cond > quu_cond_max {
+                quu_cond_max = cond;
             }
             let Some(lu) = lu_factor(&q_uu_reg) else {
                 backward_ok = false;
@@ -392,6 +408,7 @@ pub fn solve_ilqr<D: Dynamics>(
                 accepted = true;
                 break;
             }
+            line_search_rejections += 1;
             alpha *= cfg.alpha_shrink;
         }
 
@@ -420,6 +437,9 @@ pub fn solve_ilqr<D: Dynamics>(
             iters,
             converged,
             last_alpha,
+            mu_final: mu,
+            line_search_rejections,
+            quu_cond_max,
         },
     )
 }

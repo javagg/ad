@@ -8,9 +8,9 @@ license.workspace = true
 
 [dependencies]
 ad-core = { workspace = true }
+ad-verify = { workspace = true }
 
 [dev-dependencies]
-ad-verify = { workspace = true }
 ad-physics = { workspace = true }
 ad = { workspace = true }
 
