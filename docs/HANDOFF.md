@@ -118,9 +118,9 @@ iLQR 对拍测试在 `ad-optim/tests/chain.rs`（ad-optim dev-dep ad-physics）�
 `gh auth refresh -h github.com -s workflow` → 浏览器授权 →
 `git mv .github/ci.yml.pending .github/workflows/ci.yml && git commit && git push`
 
-### 6.4 推送待办
-最新提交（手写 CustomOp 双关节摆 + 文档）与此前 `abdef4e`、`972641a` 均在本地
-master，网络恢复后 `git push`。
+### 6.4 推送状态
+✅ 已全部推送（2026-10-06）：远端 master = `9d1e682`，包含 `abdef4e`、
+性能工程 `972641a` 与手写双关节摆。工作区干净。
 
 ## 7. 常用命令
 
@@ -131,7 +131,7 @@ cargo clippy --workspace --all-targets  # 零警告
 cargo check --workspace --target wasm32-unknown-unknown
 cargo run --release -p ad --example profile  # 分配画像 + 墙钟（--loop N 供 cdb 采样）
 cd crates/ad-demo && trunk serve  # web demo → localhost:8080
-git push                        # 推送（本地领先远端 3+ 提交）
+git push                        # 推送（2026-10-06 已同步至 9d1e682+）
 ```
 
 ## 8. 文件路径速查
