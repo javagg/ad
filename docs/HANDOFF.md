@@ -172,9 +172,8 @@ f32 标定（`f32.rs` + §5.1 表）、rayon 批量示例（`batch_rollout.rs`�
 `gh auth refresh -h github.com -s workflow` → 浏览器授权 →
 `git mv .github/ci.yml.pending .github/workflows/ci.yml && git commit && git push`
 ### 6.6 推送状态
-⏳ **待推送**：自 `4b0806e`（体系闭环 33–36）起共 6 个提交因 GitHub 网络中断
-（连接重置/超时，2026-10-06 晚）滞留本地——网络恢复后 `git push`。
-此前提交（至 `8e12fce`）均已推送。工作区干净。
+✅ 已全部推送（2026-10-06 晚网络恢复）：远端 master = `eb3c634`（box-DDP），
+含体系闭环（33–36）、规模实证 + 教程（37）、f32 物理算子（38）。工作区干净。
 
 ## 7. 常用命令
 `git push`（本地领先远端 3 提交）。此前提交（至 `8e12fce`）均已推送。工作区干净。
