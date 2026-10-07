@@ -199,7 +199,8 @@ f32 标定（`f32.rs` + §5.1 表）、rayon 批量示例（`batch_rollout.rs`�
 `gh auth refresh -h github.com -s workflow` → 浏览器授权 →
 `git mv .github/ci.yml.pending .github/workflows/ci.yml && git commit && git push`
 ### 6.6 推送状态
-（提交后由本次收尾更新——见提交记录）
+✅ 全部已推送（2026-10-07）：此前因网络中断滞留的 `bb64271`（v0.7.0）与
+本次 `c48b08c`（v0.7.1，§9 三项）均已达远端。工作区干净。
 
 ## 7. 常用命令
 
