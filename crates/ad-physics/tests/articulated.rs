@@ -141,12 +141,111 @@ fn composed_matches_fd_n3() {
     assert_eq!(bad, 0, "{bad} 个坐标的 FD 对拍不一致");
 }
 
+// ============================================================ 独立能量/拉格朗日公式（能量守恒 + n=3 oracle 两测试共用；
+// 与组合式路径零共享代码——"防两处同错"原则）
+
+/// 动能：点质量 i 位置 pᵢ = Σ_{j≤i} l_j·(cos θ_j, −sin θ_j)，θ_j 绝对角，
+/// vᵢ = Σ_{j≤i} l_j·θ̇_j·(−sin θ_j, −cos θ_j)——**θ̇_j 是关节速率的累积和**
+/// （w₁+…+w_j），非 w[j] 本身（第 46 条勘误）。
+fn chain_ke(q: &[f64; 3], w: &[f64; 3], lengths: &[f64; 3], masses: &[f64; 3]) -> f64 {
+    let mut kin = 0.0;
+    for i in 0..3 {
+        let (mut vx, mut vz) = (0.0, 0.0);
+        let mut thj = 0.0;
+        let mut wdj = 0.0;
+        for j in 0..=i {
+            thj += q[j];
+            wdj += w[j];
+            vx += -thj.sin() * lengths[j] * wdj;
+            vz += -thj.cos() * lengths[j] * wdj;
+        }
+        kin += 0.5 * masses[i] * (vx * vx + vz * vz);
+    }
+    kin
+}
+
+/// 势能：基座 x 向下 → −Σ mᵢ·g·（沿 x 累加的深度）
+fn chain_pot(q: &[f64; 3], lengths: &[f64; 3], masses: &[f64; 3], g: f64) -> f64 {
+    let mut pot = 0.0;
+    let mut th = 0.0;
+    let mut x_acc = 0.0;
+    for i in 0..3 {
+        th += q[i];
+        x_acc += lengths[i] * th.cos();
+        pot -= masses[i] * g * x_acc;
+    }
+    pot
+}
+
+fn chain_energy(q: &[f64; 3], w: &[f64; 3], lengths: &[f64; 3], masses: &[f64; 3], g: f64) -> f64 {
+    chain_ke(q, w, lengths, masses) + chain_pot(q, lengths, masses, g)
+}
+
+/// M_ij = ∂²KE/∂w_i∂w_j（4 点中心二阶差分，步长 h）
+fn mass_ij(
+    q: &[f64; 3],
+    w: &[f64; 3],
+    lengths: &[f64; 3],
+    masses: &[f64; 3],
+    i: usize,
+    j: usize,
+    h: f64,
+) -> f64 {
+    let mut wpp = *w;
+    wpp[i] += h;
+    wpp[j] += h;
+    let mut wpm = *w;
+    wpm[i] += h;
+    wpm[j] -= h;
+    let mut wmp = *w;
+    wmp[i] -= h;
+    wmp[j] += h;
+    let mut wmm = *w;
+    wmm[i] -= h;
+    wmm[j] -= h;
+    (chain_ke(q, &wpp, lengths, masses)
+        - chain_ke(q, &wpm, lengths, masses)
+        - chain_ke(q, &wmp, lengths, masses)
+        + chain_ke(q, &wmm, lengths, masses))
+        / (4.0 * h * h)
+}
+
+/// 高斯消元 3×3（部分主元）
+fn solve3(m: &[[f64; 3]; 3], b: &[f64; 3]) -> [f64; 3] {
+    let mut a = *m;
+    let mut x = *b;
+    for col in 0..3 {
+        let mut piv = col;
+        for r in col + 1..3 {
+            if a[r][col].abs() > a[piv][col].abs() {
+                piv = r;
+            }
+        }
+        a.swap(col, piv);
+        x.swap(col, piv);
+        for r in col + 1..3 {
+            let f = a[r][col] / a[col][col];
+            for c in col..3 {
+                a[r][c] -= f * a[col][c];
+            }
+            x[r] -= f * x[col];
+        }
+    }
+    for r in (0..3).rev() {
+        for c in r + 1..3 {
+            x[r] -= a[r][c] * x[c];
+        }
+        x[r] /= a[r][r];
+    }
+    x
+}
+
 /// n=3 被动摆能量守恒先验（半隐式欧拉 4000 步 × dt 0.001，组合式动力学）。
 ///
 /// **实现期勘误（第 46 条）**：本测试首版有两处相互抵消的 bug——
 /// (a) 速度从不更新（w 恒 0，"守恒"的是冻结系统）；
-/// (b) 动能公式把关节速率 w[j] 直接当连杆绝对角速率（缺累积和
-///     θ̇_j = w₁+…+w_j），静止时两者同为 0 → 检不出。
+/// (b) 动能公式把关节速率 w[j] 直接当连杆绝对角速率（缺累积和），
+///     静止时两者同为 0 → 检不出。
 /// 修正后能量才真正守恒（有界振荡），并首次以运动态验证 n=3 组合动力学。
 #[test]
 fn energy_conservation_n3_passive() {
@@ -156,37 +255,9 @@ fn energy_conservation_n3_passive() {
     let chain = PlanarChain::new(&masses, &lengths, g);
     let dt = 0.001f64;
 
-    // 独立能量公式：基座 x 向下 → 势能 = −m·g·（沿 x 累加的深度）；
-    // 点质量 i 位置 pᵢ = Σ_{j≤i} l_j·(cos θ_j, −sin θ_j)，θ_j 为绝对角，
-    // 速度 vᵢ = Σ_{j≤i} l_j·θ̇_j·(−sin θ_j, −cos θ_j)——**θ̇_j 是关节
-    // 速率的累积和**（w₁+…+w_j），非 w[j] 本身。
-    let energy = |q: &[f64; 3], w: &[f64; 3]| -> f64 {
-        let mut kin = 0.0;
-        let mut pot = 0.0;
-        let mut th = 0.0;
-        let mut x_acc = 0.0f64;
-        for i in 0..3 {
-            th += q[i];
-            x_acc += lengths[i] * th.cos();
-            let mut vx = 0.0;
-            let mut vz = 0.0;
-            let mut thj = 0.0;
-            let mut wdj = 0.0;
-            for j in 0..=i {
-                thj += q[j];
-                wdj += w[j];
-                vx += -thj.sin() * lengths[j] * wdj;
-                vz += -thj.cos() * lengths[j] * wdj;
-            }
-            kin += 0.5 * masses[i] * (vx * vx + vz * vz);
-            pot -= masses[i] * g * x_acc; // 势能 = −m·g·(深度)：x 向下为正
-        }
-        kin + pot
-    };
-
     let mut q = [0.5f64, -0.3, 0.2];
     let mut w = [0.3f64, -0.2, 0.1]; // 非零初速：动能通道必须真的参与
-    let e0 = energy(&q, &w);
+    let e0 = chain_energy(&q, &w, &lengths, &masses, g);
     let mut max_dev = 0.0f64;
     for step in 0..4000 {
         let mut ctx = Context::<f64>::new();
@@ -206,7 +277,7 @@ fn energy_conservation_n3_passive() {
         }
         w = w_new;
         if step % 400 == 0 {
-            let e = energy(&q, &w);
+            let e = chain_energy(&q, &w, &lengths, &masses, g);
             let dev = (e - e0).abs() / e0.abs().max(1.0);
             max_dev = max_dev.max(dev);
         }
@@ -227,65 +298,6 @@ fn composed_matches_lagrangian_oracle_n3() {
     let lengths = [1.0f64, 0.9, 0.7];
     let g = 9.81f64;
     let chain = PlanarChain::new(&masses, &lengths, g);
-
-    fn ke(q: &[f64; 3], w: &[f64; 3], lengths: &[f64; 3], masses: &[f64; 3]) -> f64 {
-        let mut kin = 0.0;
-        for i in 0..3 {
-            let (mut vx, mut vz) = (0.0, 0.0);
-            let mut thj = 0.0;
-            let mut wdj = 0.0;
-            for j in 0..=i {
-                thj += q[j];
-                wdj += w[j];
-                vx += -thj.sin() * lengths[j] * wdj;
-                vz += -thj.cos() * lengths[j] * wdj;
-            }
-            kin += 0.5 * masses[i] * (vx * vx + vz * vz);
-        }
-        kin
-    }
-    fn vpot(q: &[f64; 3], lengths: &[f64; 3], masses: &[f64; 3], g: f64) -> f64 {
-        let mut pot = 0.0;
-        let mut th = 0.0;
-        let mut x_acc = 0.0;
-        for i in 0..3 {
-            th += q[i];
-            x_acc += lengths[i] * th.cos();
-            pot -= masses[i] * g * x_acc;
-        }
-        pot
-    }
-
-    // 高斯消元 3×3（部分主元）
-    fn solve3(m: &[[f64; 3]; 3], b: &[f64; 3]) -> [f64; 3] {
-        let mut a = *m;
-        let mut x = *b;
-        for col in 0..3 {
-            let mut piv = col;
-            for r in col + 1..3 {
-                if a[r][col].abs() > a[piv][col].abs() {
-                    piv = r;
-                }
-            }
-            a.swap(col, piv);
-            x.swap(col, piv);
-            for r in col + 1..3 {
-                let f = a[r][col] / a[col][col];
-                for c in col..3 {
-                    a[r][c] -= f * a[col][c];
-                }
-                x[r] -= f * x[col];
-            }
-        }
-        for r in (0..3).rev() {
-            for c in r + 1..3 {
-                x[r] -= a[r][c] * x[c];
-            }
-            x[r] /= a[r][r];
-        }
-        x
-    }
-
     let h = 1e-4f64;
     let states: [([f64; 3], [f64; 3]); 4] = [
         ([0.4, -0.3, 0.2], [-0.138, 0.288, -0.224]),
@@ -296,28 +308,9 @@ fn composed_matches_lagrangian_oracle_n3() {
     for (q, w) in states {
         // 数值 M、g（h=1e-4 平衡截断与噪声）
         let mut m = [[0.0f64; 3]; 3];
-        let mass_ij = |i: usize, j: usize| -> f64 {
-            let mut wpp = w;
-            wpp[i] += h;
-            wpp[j] += h;
-            let mut wpm = w;
-            wpm[i] += h;
-            wpm[j] -= h;
-            let mut wmp = w;
-            wmp[i] -= h;
-            wmp[j] += h;
-            let mut wmm = w;
-            wmm[i] -= h;
-            wmm[j] -= h;
-            (ke(&q, &wpp, &lengths, &masses)
-                - ke(&q, &wpm, &lengths, &masses)
-                - ke(&q, &wmp, &lengths, &masses)
-                + ke(&q, &wmm, &lengths, &masses))
-                / (4.0 * h * h)
-        };
         for i in 0..3 {
             for j in 0..3 {
-                m[i][j] = mass_ij(i, j);
+                m[i][j] = mass_ij(&q, &w, &lengths, &masses, i, j, h);
             }
         }
         let mut gvec = [0.0f64; 3];
@@ -326,8 +319,8 @@ fn composed_matches_lagrangian_oracle_n3() {
             qp[i] += h;
             let mut qm = q;
             qm[i] -= h;
-            gvec[i] =
-                (vpot(&qp, &lengths, &masses, g) - vpot(&qm, &lengths, &masses, g)) / (2.0 * h);
+            gvec[i] = (chain_pot(&qp, &lengths, &masses, g) - chain_pot(&qm, &lengths, &masses, g))
+                / (2.0 * h);
         }
         // Coriolis：(Cw)_i = ½ Σ_jk (∂M_ij/∂q_k + ∂M_ik/∂q_j − ∂M_jk/∂q_i) w_j w_k
         let dmq = |i: usize, j: usize, k: usize| -> f64 {
@@ -335,27 +328,9 @@ fn composed_matches_lagrangian_oracle_n3() {
             qp[k] += h;
             let mut qm = q;
             qm[k] -= h;
-            let hi = 1e-4f64;
-            let mj = |q2: &[f64; 3]| -> f64 {
-                let mut wpp = w;
-                wpp[i] += hi;
-                wpp[j] += hi;
-                let mut wpm = w;
-                wpm[i] += hi;
-                wpm[j] -= hi;
-                let mut wmp = w;
-                wmp[i] -= hi;
-                wmp[j] += hi;
-                let mut wmm = w;
-                wmm[i] -= hi;
-                wmm[j] -= hi;
-                (ke(q2, &wpp, &lengths, &masses)
-                    - ke(q2, &wpm, &lengths, &masses)
-                    - ke(q2, &wmp, &lengths, &masses)
-                    + ke(q2, &wmm, &lengths, &masses))
-                    / (4.0 * hi * hi)
-            };
-            (mj(&qp) - mj(&qm)) / (2.0 * h)
+            (mass_ij(&qp, &w, &lengths, &masses, i, j, h)
+                - mass_ij(&qm, &w, &lengths, &masses, i, j, h))
+                / (2.0 * h)
         };
         let mut cw = [0.0f64; 3];
         for i in 0..3 {

@@ -1,11 +1,13 @@
 //! BarrierContactOp 验收（HANDOFF §9.1 / design.md 第 45 条）：
-//! 1. 单步逐坐标 FD 隔离器——手写 VJP 逐分量对拍（穿透/接触/分离/激活边界）；
-//! 2. 泛型验证器 `validate_custom_op` f64 + f32（四种追踪形态）；
-//! 3. 物理先验：非粘着（f ≥ 0）、远处无感（gap ≥ d̂ 力为 0）、
-//!    单调阻塞（gap 越小力越大）、静力平衡穿透量 ~ m·g/f'（柔度可辨识）；
-//! 4. **C² 光滑探针**——三阶差分有界性（max-clamp 式 barrier 会在此当场暴露）；
-//! 5. 刚度 κ 扫描：弹跳球 rollout 上 AD vs FD + Taylor 余项 + 梯度健康度
-//!    + 高 κ 穿透受抑（刚性换光滑的直接实证）。
+//! 1. 泛型验证器 `validate_custom_op` f64 + f32——手写 VJP 逐分量 FD 对拍
+//!    （四种追踪形态 + 前向确定性 + gins 契约），点集覆盖穿透/零/带内/
+//!    激活边界/分离五段（第 33 条公开验证器取代手写隔离器）；
+//! 2. 物理先验：非粘着（f ≥ 0）、远处无感（gap ≥ d̂ 力为 0）、
+//!    单调阻塞（gap 越小力越大）、静力平衡间隙 ~ m·g/f'（柔度可辨识）；
+//! 3. **C² 光滑探针**——激活边界处二阶差分商连续性（clamp 式对照
+//!    组必须被同一探针抓住）；
+//! 4. 刚度 κ 扫描：弹跳球 rollout 上 AD vs FD + Taylor 余项 + 梯度健康度
+//!    + 高 κ 最近逼近受抑（刚性换光滑的直接实证）。
 
 use ad_core::{Context, CustomOp, AD};
 use ad_physics::BarrierContactOp;
@@ -14,88 +16,17 @@ use std::rc::Rc;
 
 const OP: BarrierContactOp = BarrierContactOp;
 
-/// 平滑混合全部输出的标量损失（确定性），与 AD 路径的 loss 表达式逐项一致
-fn loss_of_out(out: &[f64]) -> f64 {
-    let mut s = 0.0;
-    for (i, &o) in out.iter().enumerate() {
-        s += (0.3 + 0.11 * i as f64) * o + 0.2 * o * o;
-    }
-    s += 0.15 * out[0] * out[out.len() - 1];
-    s
-}
-
-fn check_op(name: &str, inputs: &[f64], tol: f64) {
-    let mut ctx = Context::<f64>::new();
-    let mut vars = Vec::new();
-    let mut ad_in = Vec::new();
-    for &v in inputs {
-        let (ad, var) = ctx.var(v);
-        ad_in.push(ad);
-        vars.push(var);
-    }
-    let out = ctx.call_custom(OP, &ad_in);
-    let n = out.len();
-    // 显式 ctx 路径嵌套调用会双重借用——逐语句绑定（第 44 条 c 项模式）
-    let lin0 = ctx.mul(AD::constant(0.3), out[0]);
-    let sq0 = ctx.mul(out[0], out[0]);
-    let quad0 = ctx.mul(AD::constant(0.2), sq0);
-    let mut l = ctx.add(lin0, quad0);
-    for (i, o) in out.iter().enumerate().skip(1) {
-        let lin = ctx.mul(AD::constant(0.3 + 0.11 * i as f64), *o);
-        let sq = ctx.mul(*o, *o);
-        let quad = ctx.mul(AD::constant(0.2), sq);
-        let term = ctx.add(lin, quad);
-        l = ctx.add(l, term);
-    }
-    let cross_in = ctx.mul(out[0], out[n - 1]);
-    let cross = ctx.mul(AD::constant(0.15), cross_in);
-    l = ctx.add(l, cross);
-    ctx.backward(l);
-
-    let h = 1e-6;
-    let mut bad = 0;
-    for j in 0..inputs.len() {
-        let mut tp = inputs.to_vec();
-        tp[j] += h;
-        let mut tm = inputs.to_vec();
-        tm[j] -= h;
-        let fp = loss_of_out(&OP.forward(&tp).0);
-        let fm = loss_of_out(&OP.forward(&tm).0);
-        let fd = (fp - fm) / (2.0 * h);
-        let g = ctx.grad(vars[j]).unwrap();
-        if (g - fd).abs() > tol * (1.0 + g.abs() + fd.abs()) {
-            eprintln!("{name}: input[{j}] ad {g:.10} vs fd {fd:.10}");
-            bad += 1;
-        }
-    }
-    assert_eq!(bad, 0, "{name}: {bad} mismatched coordinates");
-}
-
-/// 测试点：κ=50、d̂=0.1、ε=1e-3（f32 点集见 validator_barrier）
-#[test]
-fn fd_barrier_contact() {
-    // 深穿透：非线性最强的区域（g̃ 的 softplus 尾部）
-    check_op("barrier@penetrating", &[-0.05, 50.0, 0.1, 1e-3], 1e-5);
-    // 刚触零：gap=0 处 g̃ = ε/2，两段 softplus 同时活跃
-    check_op("barrier@gap_zero", &[0.0, 50.0, 0.1, 1e-3], 1e-5);
-    // 接近带内
-    check_op("barrier@in_band", &[0.03, 50.0, 0.1, 1e-3], 1e-5);
-    // 激活边界附近：max-clamp 式实现会在此暴露非光滑
-    check_op("barrier@activation_edge", &[0.0999, 50.0, 0.1, 1e-3], 1e-5);
-    // 分离态（gap > d̂）：力 ≈ 0 但 softplus 尾部仍光滑可导
-    check_op("barrier@separated", &[0.2, 50.0, 0.1, 1e-3], 1e-5);
-}
-
 // ============================================================ 泛型验证器（f64 + f32）
 
 #[test]
 fn validator_barrier_f64() {
-    // 点集覆盖穿透/零/带内/带外四段
+    // 点集覆盖穿透/零/带内/激活边界/分离五段（κ=50、d̂=0.1、ε=1e-3）
     let pts: Vec<Vec<f64>> = vec![
-        vec![-0.05, 50.0, 0.1, 1e-3],
-        vec![0.0, 20.0, 0.05, 1e-3],
-        vec![0.03, 50.0, 0.1, 1e-3],
-        vec![0.2, 50.0, 0.1, 1e-3],
+        vec![-0.05, 50.0, 0.1, 1e-3],  // 深穿透：g̃ 的 softplus 尾部，非线性最强
+        vec![0.0, 20.0, 0.05, 1e-3],   // gap=0：g̃ = ε/2，两段 softplus 同时活跃
+        vec![0.03, 50.0, 0.1, 1e-3],   // 接近带内
+        vec![0.0999, 50.0, 0.1, 1e-3], // 激活边界：max-clamp 式实现在此暴露非光滑
+        vec![0.2, 50.0, 0.1, 1e-3],    // 分离态：力 ≈ 0 但尾部仍光滑可导
     ];
     let report = ad_verify::op_check::validate_custom_op(
         Rc::new(BarrierContactOp) as Rc<dyn CustomOp<f64>>,
@@ -272,18 +203,16 @@ mod bounce {
         let (mut v, vv) = ctx.var(v0);
         let (k_ad, vk) = ctx.var(k);
         let dt = AD::constant(DT);
-        let one = AD::constant(1.0);
         let mut min_gap = f64::INFINITY;
         let mut max_z = f64::NEG_INFINITY;
         for _ in 0..t_total {
-            // gap = z；barrier 力沿 gap 增大方向推（+z）；重力 −g
+            // gap = z；barrier 力沿 gap 增大方向推（+z）；重力 −g；m = 1
             let f = ctx.call_custom(
                 BarrierContactOp,
                 &[z, k_ad, AD::constant(DHAT), AD::constant(EPS)],
             );
             let acc = ctx.sub(f[0], AD::constant(G));
-            let acc_n = ctx.div(acc, one);
-            let dv = ctx.mul(dt, acc_n);
+            let dv = ctx.mul(dt, acc);
             v = ctx.add(v, dv);
             let dz = ctx.mul(dt, v);
             z = ctx.add(z, dz);

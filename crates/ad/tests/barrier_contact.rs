@@ -14,7 +14,7 @@
 //! 3. **系统辨识**：从轨迹反推刚度 κ（barrier 特有的可辨识参数，
 //!    对应柔度/接触刚度标定）。
 
-use ad::{Context, CustomOp, AD};
+use ad::{Context, AD};
 use ad_physics::BarrierContactOp;
 
 const DT: f64 = 0.002;
@@ -121,21 +121,9 @@ fn trajectory_shapes_differ_as_documented() {
     eprintln!("LCP 静止：z = {:+.6}, v = {:+.2e}", z.value, v.value);
     assert!(z.value.abs() < 1e-3, "LCP 未精确收在地面：z = {}", z.value);
 
-    // barrier（κ=200）：带内柔度 + ε 软肩——静止在肩部平衡点 z* > 0
-    // （f(z*) = m·g，z* 由二分解出；力地板 κε²/4z² 使 z* 略高于 d̂，
-    //   即"柔度足迹" O(κε²/g)——barrier 用零穿透换有限接触距离）
+    // barrier（κ=200）：带内柔度 + ε 软肩——围绕肩部平衡点 z*（f(z*) = m·g，
+    // z* > d̂ 受力地板 κε²/4z² 托起，"柔度足迹" O(κε²/g)）的有界振荡
     let k = 200.0f64;
-    let f_of = |gap: f64| BarrierContactOp.forward(&[gap, k, DHAT, EPS]).0[0];
-    let (mut lo, mut hi) = (1e-6f64, 0.2); // f(lo) ≫ g，f(hi) ≈ 0 < g
-    for _ in 0..200 {
-        let mid = 0.5 * (lo + hi);
-        if f_of(mid) > G {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    let z_eq = 0.5 * (lo + hi);
     let mut ctx2 = Context::<f64>::new();
     let k_ad = ctx2.var(k).0;
     let (mut zb, mut vb) = (ctx2.var(0.08).0, AD::constant(0.0));
@@ -148,7 +136,7 @@ fn trajectory_shapes_differ_as_documented() {
         zb_max = zb_max.max(zb.value);
     }
     eprintln!(
-        "barrier 弹跳：z ∈ [{zb_min:.6}, {zb_max:.6}]（肩部平衡点 {z_eq:.6}），终值 {:+.6}",
+        "barrier 弹跳：z ∈ [{zb_min:.6}, {zb_max:.6}]，终值 {:+.6}",
         zb.value
     );
     // 保守 barrier 无耗散 → 围绕肩部平衡点的有界振荡（不会"静止"）：

@@ -29,8 +29,6 @@ pub trait Integrator<S: Scalar> {
         u: &[AD<S>],
         dt: S,
     ) -> (Vec<AD<S>>, Vec<AD<S>>);
-
-    fn name(&self) -> &'static str;
 }
 
 /// 半隐式（辛）欧拉：先更新速度、再用**新**速度更新位置。
@@ -58,10 +56,6 @@ impl<S: Scalar> Integrator<S> for SemiImplicitEuler {
             q_new.push(ctx.add(*x, dx));
         }
         (q_new, qd_new)
-    }
-
-    fn name(&self) -> &'static str {
-        "semi_implicit_euler"
     }
 }
 
@@ -122,10 +116,6 @@ impl<S: Scalar> Integrator<S> for Rk4 {
             qd_new.push(wn);
         }
         (q_new, qd_new)
-    }
-
-    fn name(&self) -> &'static str {
-        "rk4"
     }
 }
 

@@ -56,68 +56,9 @@ impl Dynamics for ArticulatedDyn {
     }
 }
 
-/// iLQR 甩摆：从 (0.3, −0.2, 0.1) 附近甩到 (0.9, 0.4, −0.3)
-#[test]
-fn ilqr_articulated_swing_up() {
-    let chain = PlanarChain::new(&MASSES, &LENGTHS, GRAV);
-    let d = ArticulatedDyn::new(chain, &SemiImplicitEuler);
-    let t_total = 80;
-    let x0 = vec![0.3, -0.2, 0.1, 0.0, 0.0, 0.0];
-    let goal = vec![0.9, 0.4, -0.3, 0.0, 0.0, 0.0];
-    let cost = QuadraticCost {
-        q: vec![0.5; 6],
-        r: vec![0.01; N],
-        qf: vec![20.0, 20.0, 20.0, 1.0, 1.0, 1.0],
-        goal: goal.clone(),
-    };
-    let u0: Vec<Vec<f64>> = (0..t_total)
-        .map(|t| vec![0.2 * (t as f64 * 0.2).sin(); N])
-        .collect();
-    let cfg = IlqrCfg {
-        max_iters: 60,
-        ..Default::default()
-    };
-    let (_u, rep) = solve_ilqr(&d, &x0, &u0, &cost, &cfg);
-    eprintln!(
-        "铰接体 iLQR：loss {:.4} → {:.4}（{} 迭代）",
-        rep.loss0, rep.loss, rep.iters
-    );
-    assert!(rep.loss < rep.loss0 * 0.5, "损失未显著下降");
-}
-
-// ============================================================ 积分器对照（第 46 条）
-
-/// 被动 rollout（无控制——零阶保持的输入失配会主导轨迹差，淹没积分器阶数）
-fn rollout_states(integ: &'static dyn Integrator<f64>, dt: f64, steps: usize) -> Vec<[f64; N]> {
-    let chain = PlanarChain::new(&MASSES, &LENGTHS, GRAV);
-    let masses: Vec<AD<f64>> = chain.masses.iter().map(|&v| AD::constant(v)).collect();
-    let damping: Vec<AD<f64>> = (0..N).map(|_| AD::constant(0.0)).collect();
-    let zeros: Vec<AD<f64>> = (0..N).map(|_| AD::constant(0.0)).collect();
-    let mut q: Vec<f64> = vec![0.3, -0.2, 0.1];
-    let mut qd: Vec<f64> = vec![0.5, -0.3, 0.2];
-    let mut traj = Vec::with_capacity(steps);
-    for _ in 0..steps {
-        let mut ctx = Context::<f64>::new();
-        let q_ad: Vec<AD<f64>> = q.iter().map(|&v| ctx.var(v).0).collect();
-        let qd_ad: Vec<AD<f64>> = qd.iter().map(|&v| ctx.var(v).0).collect();
-        let u_empty: Vec<AD<f64>> = Vec::new();
-        let accel = |ctx: &mut Context<f64>, q: &[AD<f64>], qd: &[AD<f64>], u: &[AD<f64>]| {
-            let _ = u;
-            articulated_forward(ctx, &chain, &masses, q, qd, &zeros, &damping)
-        };
-        let (qn, wn) = integ.step(&mut ctx, &accel, &q_ad, &qd_ad, &u_empty, dt);
-        for i in 0..N {
-            q[i] = qn[i].value;
-            qd[i] = wn[i].value;
-        }
-        traj.push([q[0], q[1], q[2]]);
-    }
-    traj
-}
-
-/// 组合式动力学的 iLQR 端到端损失（给定积分器）
-fn ilqr_final_loss(integ: &'static dyn Integrator<f64>) -> (f64, f64, usize) {
-    let chain = PlanarChain::new(&MASSES, &LENGTHS, GRAV);
+/// iLQR 甩摆场景（单一出处，三处测试共用）：从 (0.3, −0.2, 0.1) 附近
+/// 甩到 (0.9, 0.4, −0.3)，返回 (初始 loss, 最终 loss, 迭代数)。
+fn swing_up(chain: PlanarChain, integ: &'static dyn Integrator<f64>) -> (f64, f64, usize) {
     let d = ArticulatedDyn::new(chain, integ);
     let t_total = 80;
     let x0 = vec![0.3, -0.2, 0.1, 0.0, 0.0, 0.0];
@@ -137,6 +78,48 @@ fn ilqr_final_loss(integ: &'static dyn Integrator<f64>) -> (f64, f64, usize) {
     };
     let (_u, rep) = solve_ilqr(&d, &x0, &u0, &cost, &cfg);
     (rep.loss0, rep.loss, rep.iters)
+}
+
+/// iLQR 甩摆基准（第 43 条）
+#[test]
+fn ilqr_articulated_swing_up() {
+    let chain = PlanarChain::new(&MASSES, &LENGTHS, GRAV);
+    let (l0, l, it) = swing_up(chain, &SemiImplicitEuler);
+    eprintln!("铰接体 iLQR：loss {l0:.4} → {l:.4}（{it} 迭代）");
+    assert!(l < l0 * 0.5, "损失未显著下降");
+}
+
+// ============================================================ 积分器对照（第 46 条）
+
+/// 被动（无控制无阻尼）单步推进——精度腿与能量腿共用
+fn passive_step(integ: &'static dyn Integrator<f64>, dt: f64, q: &mut [f64; N], w: &mut [f64; N]) {
+    let chain = PlanarChain::new(&MASSES, &LENGTHS, GRAV);
+    let masses: Vec<AD<f64>> = chain.masses.iter().map(|&v| AD::constant(v)).collect();
+    let zeros: Vec<AD<f64>> = (0..N).map(|_| AD::constant(0.0)).collect();
+    let mut ctx = Context::<f64>::new();
+    let q_ad: Vec<AD<f64>> = q.iter().map(|&v| ctx.var(v).0).collect();
+    let w_ad: Vec<AD<f64>> = w.iter().map(|&v| ctx.var(v).0).collect();
+    let u_empty: Vec<AD<f64>> = Vec::new();
+    let accel = |ctx: &mut Context<f64>, q: &[AD<f64>], qd: &[AD<f64>], u: &[AD<f64>]| {
+        let _ = u;
+        articulated_forward(ctx, &chain, &masses, q, qd, &zeros, &zeros)
+    };
+    let (qn, wn) = integ.step(&mut ctx, &accel, &q_ad, &w_ad, &u_empty, dt);
+    for i in 0..N {
+        q[i] = qn[i].value;
+        w[i] = wn[i].value;
+    }
+}
+
+/// 被动 rollout（无控制——零阶保持的输入失配会主导轨迹差，淹没积分器阶数）
+fn rollout_states(integ: &'static dyn Integrator<f64>, dt: f64, steps: usize) -> Vec<[f64; N]> {
+    let (mut q, mut w) = ([0.3, -0.2, 0.1], [0.5, -0.3, 0.2]);
+    let mut traj = Vec::with_capacity(steps);
+    for _ in 0..steps {
+        passive_step(integ, dt, &mut q, &mut w);
+        traj.push(q);
+    }
+    traj
 }
 
 #[test]
@@ -164,10 +147,7 @@ fn integrator_comparison_rk4_vs_euler() {
 
     // 2) 能量漂移（无驱动、无阻尼，4 s @ dt=0.002——dt=0.01 对此链的
     //    高频模式太大，两种积分器同样漂）：半隐式欧拉辛——有界振荡 O(dt)；
-    //    RK4 漂移 O(dt⁴)——数量级差
-    let chain = PlanarChain::new(&MASSES, &LENGTHS, GRAV);
-    let masses: Vec<AD<f64>> = chain.masses.iter().map(|&v| AD::constant(v)).collect();
-    let zeros: Vec<AD<f64>> = (0..N).map(|_| AD::constant(0.0)).collect();
+    //    RK4 漂移 O(dt⁴)——数量级差。
     // 独立能量公式：势能 = −Σ mᵢ·g·深度（基座 x 向下）；动能用闭式速度链。
     // **θ̇_j 必须是关节速率的累积和**（勘误见 ad-physics 同名测试/第 46 条）
     let energy = |q: &[f64; N], w: &[f64; N]| {
@@ -197,19 +177,7 @@ fn integrator_comparison_rk4_vs_euler() {
         let e0 = energy(&q, &w);
         let mut worst = 0.0f64;
         for t in 0..2000 {
-            let mut ctx = Context::<f64>::new();
-            let q_ad: Vec<AD<f64>> = q.iter().map(|&v| ctx.var(v).0).collect();
-            let w_ad: Vec<AD<f64>> = w.iter().map(|&v| ctx.var(v).0).collect();
-            let u_empty: Vec<AD<f64>> = Vec::new();
-            let accel = |ctx: &mut Context<f64>, q: &[AD<f64>], qd: &[AD<f64>], u: &[AD<f64>]| {
-                let _ = u;
-                articulated_forward(ctx, &chain, &masses, q, qd, &zeros, &zeros)
-            };
-            let (qn, wn) = integ.step(&mut ctx, &accel, &q_ad, &w_ad, &u_empty, 0.002);
-            for i in 0..N {
-                q[i] = qn[i].value;
-                w[i] = wn[i].value;
-            }
+            passive_step(integ, 0.002, &mut q, &mut w);
             if t % 100 == 0 {
                 worst = worst.max((energy(&q, &w) - e0).abs());
             }
@@ -228,8 +196,9 @@ fn integrator_comparison_rk4_vs_euler() {
 
     // 3) iLQR 收敛：两种积分器都显著收敛；RK4 的离散问题更接近真实
     //    动力学（对照数字入 design.md 第 46 条，不做强序断言）
-    let (l0_e, l_e, it_e) = ilqr_final_loss(&SemiImplicitEuler);
-    let (l0_r, l_r, it_r) = ilqr_final_loss(&Rk4);
+    let chain = PlanarChain::new(&MASSES, &LENGTHS, GRAV);
+    let (l0_e, l_e, it_e) = swing_up(chain.clone(), &SemiImplicitEuler);
+    let (l0_r, l_r, it_r) = swing_up(chain, &Rk4);
     eprintln!(
         "iLQR 甩摆：Euler loss {l0_e:.4} → {l_e:.4}（{it_e} 迭代）；RK4 loss {l0_r:.4} → {l_r:.4}（{it_r} 迭代）"
     );
@@ -358,29 +327,8 @@ fn ilqr_from_chain_desc_bit_identical() {
     let (chain_desc, _damping) = desc.to_chain();
     let chain_hard = PlanarChain::new(&MASSES, &LENGTHS, GRAV);
 
-    let run = |chain: PlanarChain| -> (f64, f64, usize) {
-        let d = ArticulatedDyn::new(chain, &SemiImplicitEuler);
-        let t_total = 80;
-        let x0 = vec![0.3, -0.2, 0.1, 0.0, 0.0, 0.0];
-        let goal = vec![0.9, 0.4, -0.3, 0.0, 0.0, 0.0];
-        let cost = QuadraticCost {
-            q: vec![0.5; 6],
-            r: vec![0.01; N],
-            qf: vec![20.0, 20.0, 20.0, 1.0, 1.0, 1.0],
-            goal,
-        };
-        let u0: Vec<Vec<f64>> = (0..t_total)
-            .map(|t| vec![0.2 * (t as f64 * 0.2).sin(); N])
-            .collect();
-        let cfg = IlqrCfg {
-            max_iters: 60,
-            ..Default::default()
-        };
-        let (_u, rep) = solve_ilqr(&d, &x0, &u0, &cost, &cfg);
-        (rep.loss0, rep.loss, rep.iters)
-    };
-    let (l0_d, l_d, it_d) = run(chain_desc);
-    let (l0_h, l_h, it_h) = run(chain_hard);
+    let (l0_d, l_d, it_d) = swing_up(chain_desc, &SemiImplicitEuler);
+    let (l0_h, l_h, it_h) = swing_up(chain_hard, &SemiImplicitEuler);
     eprintln!(
         "描述驱动 iLQR：{l0_d:.6} → {l_d:.6}（{it_d} 迭代）；硬编码：{l0_h:.6} → {l_h:.6}（{it_h} 迭代）"
     );

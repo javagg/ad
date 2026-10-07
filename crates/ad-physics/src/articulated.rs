@@ -91,10 +91,6 @@ impl ChainDesc {
         self
     }
 
-    pub fn n(&self) -> usize {
-        self.joints.len()
-    }
-
     /// 构建链 + 逐关节阻尼（`articulated_forward` 的 damping 槽位）。
     /// axis 现仅支持 PlanarY（3D 化的扩展点）。
     pub fn to_chain(&self) -> (PlanarChain, Vec<f64>) {
