@@ -7,7 +7,10 @@
 //! - [`ContactNormalOp`]：Hunt–Crossley 型法向力，`f = pen^p·(k − d·gap_vel)`
 //!   （接近时 `gap_vel < 0` 力增大 → 耗散）；
 //! - [`RegularizedFrictionOp`]：正则化库仑摩擦，`f_t = −μ·f_n·v_t/√(|v_t|²+ε²)`，
-//!   严格满足 |f_t| ≤ μ·f_n（摩擦锥内）。
+//!   严格满足 |f_t| ≤ μ·f_n（摩擦锥内）；
+//! - [`BarrierContactOp`]：IPC 思路的 log-barrier 阻塞力（§9.1 路线）——
+//!   纯位置依赖（保守）、C^∞ 光滑、无活动集切换，对梯度质量敏感的
+//!   优化（iLQR/系统辨识）最稳的一条接触路线。
 //!
 //! 泛型实现（§12.3 第 38 条模式）：同一份 forward/手写 VJP 服务 f64 与 f32
 //! （`S: Scalar`）；f64 路径由 FD 隔离器 + 接触锥先验验证，f32 由同点对拍
@@ -61,12 +64,12 @@ impl<S: Scalar> CustomOp<S> for ContactNormalOp {
         let pen_p = pen.powf(p);
         let pen_pm1 = pen.powf(p - S::one());
         smallvec![
-            lf * p * pen_pm1 * base * dpen,                  // ∂/∂gap
-            lf * (-d * pen_p),                               // ∂/∂gap_vel
-            lf * pen_p,                                      // ∂/∂k
-            lf * pen_p * pen.ln() * base,                    // ∂/∂p
-            lf * (-pen_p * gv),                              // ∂/∂d
-            lf * p * pen_pm1 * base * eps / (two * rho),     // ∂pen/∂ε = ε/(2ρ)
+            lf * p * pen_pm1 * base * dpen,              // ∂/∂gap
+            lf * (-d * pen_p),                           // ∂/∂gap_vel
+            lf * pen_p,                                  // ∂/∂k
+            lf * pen_p * pen.ln() * base,                // ∂/∂p
+            lf * (-pen_p * gv),                          // ∂/∂d
+            lf * p * pen_pm1 * base * eps / (two * rho), // ∂pen/∂ε = ε/(2ρ)
         ]
     }
     fn name(&self) -> &'static str {
@@ -115,5 +118,76 @@ impl<S: Scalar> CustomOp<S> for RegularizedFrictionOp {
     }
     fn name(&self) -> &'static str {
         "regularized_friction"
+    }
+}
+
+/// IPC 思路的 log-barrier 阻塞力（HANDOFF §9.1 / design.md 第 45 条）。
+///
+/// 纯 log-barrier 力 `f = κ/gap`（能量 `−κ·ln(gap)` 的梯度）在 gap ≤ 0
+/// 无定义且 gap → 0⁺ 时发散到无穷；IPC 用"激活距离 d̂ + 多项式窗"把
+/// 阻塞限制在接近带内。本算子取其光滑化形态（全部由 C^∞ 的
+/// softplus_ε 复合而成，处处二阶可导）：
+///
+/// - `g̃ = softplus_ε(gap)`——正则化间隙（≈ max(0, gap)，恒 > 0）；
+/// - `â = softplus_ε(d̂ − g̃)`——光滑激活窗（gap ≥ d̂ 后指数衰减到 0）；
+/// - `f = κ·â/g̃`——阻塞力 ≥ 0，恒沿 gap 增大方向推。
+///
+/// 极限行为（ε → 0⁺、gap ∈ (0, d̂)）：`f ≈ κ·(d̂ − gap)/gap`——
+/// `κ·d̂/gap − κ` 正是 log-barrier 力族；gap → 0⁺ 时如 1/gap 发散
+/// （穿透被指数级排斥），gap ≥ d̂ 时力恒为 0（远处无感知）。
+/// ε > 0 时全实轴有定义：深度穿透下 `g̃ ≈ ε²/(4|gap|)`，
+/// f 随穿透深度线性增长（等效刚度 4κ·d̂/ε²）。
+///
+/// **与另两条接触路线的分工**（§12.3 第 45 条有量化对比）：
+/// Hunt–Crossley（连续、需调刚度）/ LCP 活动集（精确、半光滑切换）/
+/// barrier（保守阻塞、C² 光滑、梯度场无 kink——iLQR/系统辨识首选）。
+/// 代价是**刚性换光滑**：高 κ 需要更小步长或更大 ε（显式积分稳定域
+/// ω·Δt < 2，ω ≈ √(κ·d̂)/g̃），刚度扫描测试实证。
+///
+/// inputs = [gap, κ, d̂, ε]（4），output = [f]（1）。
+/// 定义域：κ > 0、d̂ > 0、ε > 0（ε 是正则化半径，非形状参数）。
+#[derive(Clone, Copy)]
+pub struct BarrierContactOp;
+
+impl<S: Scalar> CustomOp<S> for BarrierContactOp {
+    fn num_inputs(&self) -> usize {
+        4
+    }
+    fn num_outputs(&self) -> usize {
+        1
+    }
+    fn forward(&self, i: &[S]) -> (SmallVec<[S; 8]>, SmallVec<[S; 8]>) {
+        let (gap, k, dhat, eps) = (i[0], i[1], i[2], i[3]);
+        let g = softplus_eps(gap, eps);
+        let a = softplus_eps(dhat - g, eps);
+        (smallvec![k * a / g], i.iter().copied().collect())
+    }
+    fn backward(&self, r: &[S], go: &[S]) -> SmallVec<[S; 8]> {
+        let (gap, k, dhat, eps) = (r[0], r[1], r[2], r[3]);
+        let lf = go[0];
+        let two = S::one() + S::one();
+        // g̃ = softplus_ε(gap)：∂g̃/∂gap = ½(1 + gap/ρ)，∂g̃/∂ε = ε/(2ρ)
+        let rho = (gap * gap + eps * eps).sqrt();
+        let g = (gap + rho) / two;
+        let gp = (S::one() + gap / rho) / two;
+        let ge = eps / (two * rho);
+        // â = softplus_ε(d̂ − g̃)：u = d̂ − g̃，∂â/∂u = ½(1 + u/σ)
+        let u = dhat - g;
+        let sig = (u * u + eps * eps).sqrt();
+        let a = (u + sig) / two;
+        let ah = (S::one() + u / sig) / two;
+        // ∂â/∂ε = ε/(2σ) − ah·ge（u 随 ε 经 g̃ 间接依赖）
+        let ae = eps / (two * sig) - ah * ge;
+        let g2 = g * g;
+        smallvec![
+            // f = κ·â/g̃；∂â/∂gap = −ah·gp
+            lf * k * (-ah * gp / g - a * gp / g2), // ∂/∂gap
+            lf * a / g,                            // ∂/∂κ
+            lf * k * ah / g,                       // ∂/∂d̂
+            lf * k * (ae / g - a * ge / g2),       // ∂/∂ε
+        ]
+    }
+    fn name(&self) -> &'static str {
+        "barrier_contact"
     }
 }

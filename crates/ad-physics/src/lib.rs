@@ -11,14 +11,16 @@ pub mod articulated;
 pub mod chain;
 pub mod contact;
 pub mod gyro;
+pub mod integrate;
 pub mod ops;
 pub mod spatial;
 
-pub use articulated::{articulated_forward, rnea_torques, PlanarChain};
+pub use articulated::{articulated_forward, rnea_torques, ChainDesc, JointAxis, PlanarChain};
 pub use chain::DoublePendulumStep;
-pub use contact::{ContactNormalOp, RegularizedFrictionOp};
+pub use contact::{BarrierContactOp, ContactNormalOp, RegularizedFrictionOp};
 pub use gyro::GyroscopicStep;
+pub use integrate::{AccelFn, Integrator, Rk4, SemiImplicitEuler};
 pub use ops::{
-    SpatialForceCross,
     InertiaApply, PluckerForce, PluckerMotion, RotateInertia, So3Exp, SpatialCrossMotion,
+    SpatialForceCross,
 };

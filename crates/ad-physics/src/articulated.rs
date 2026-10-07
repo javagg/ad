@@ -38,6 +38,91 @@ pub struct PlanarChain {
     pub g: f64,
 }
 
+/// 关节轴向（URDF `<axis>` 的对应物）。平面链模型现仅支持绕 y 旋转；
+/// 字段先行以使描述格式前向兼容（3D 化时无需破坏 API）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JointAxis {
+    /// 绕 y 轴旋转（平面链约定，见模块文档）
+    PlanarY,
+}
+
+/// 单关节数据（URDF-lite）：质量 / 长度 / 轴向 / 阻尼。
+#[derive(Clone, Debug)]
+pub struct JointDesc {
+    /// 连杆端部点质量
+    pub mass: f64,
+    /// 关节 i 到质量 i 的距离（沿连杆 x 轴）
+    pub length: f64,
+    /// 关节粘滞阻尼（系统辨识的可辨识参数）
+    pub damping: f64,
+    /// 旋转轴向
+    pub axis: JointAxis,
+}
+
+/// 数据驱动的链描述（HANDOFF §9.3 / design.md 第 47 条）——URDF/MJCF
+/// "场景格式定义多体模型、引擎提供动力学"分工在 AD 侧的对应物：
+/// 结构化描述（每关节 {质量, 长度, 轴向, 阻尼} 列表 + 重力）→ 链构建器，
+/// 构建产物与手写 `PlanarChain::new` **逐位一致**（f64 槽位原值拷贝，
+/// 无算术重排）。
+#[derive(Clone, Debug)]
+pub struct ChainDesc {
+    /// 逐关节数据
+    pub joints: Vec<JointDesc>,
+    /// 重力加速度（基座系 x 正向）
+    pub g: f64,
+}
+
+impl ChainDesc {
+    pub fn new(g: f64) -> Self {
+        ChainDesc {
+            joints: Vec::new(),
+            g,
+        }
+    }
+
+    /// 追加一关节（builder 风格）
+    pub fn joint(mut self, mass: f64, length: f64, damping: f64) -> Self {
+        self.joints.push(JointDesc {
+            mass,
+            length,
+            damping,
+            axis: JointAxis::PlanarY,
+        });
+        self
+    }
+
+    pub fn n(&self) -> usize {
+        self.joints.len()
+    }
+
+    /// 构建链 + 逐关节阻尼（`articulated_forward` 的 damping 槽位）。
+    /// axis 现仅支持 PlanarY（3D 化的扩展点）。
+    pub fn to_chain(&self) -> (PlanarChain, Vec<f64>) {
+        assert!(!self.joints.is_empty(), "empty chain description");
+        let mut masses = Vec::with_capacity(self.joints.len());
+        let mut lengths = Vec::with_capacity(self.joints.len());
+        let mut damping = Vec::with_capacity(self.joints.len());
+        for j in &self.joints {
+            assert!(
+                j.axis == JointAxis::PlanarY,
+                "非 y 轴关节在平面链模型中不受支持"
+            );
+            assert!(j.mass > 0.0 && j.length > 0.0, "质量/长度须为正");
+            masses.push(j.mass);
+            lengths.push(j.length);
+            damping.push(j.damping);
+        }
+        (
+            PlanarChain {
+                masses,
+                lengths,
+                g: self.g,
+            },
+            damping,
+        )
+    }
+}
+
 impl PlanarChain {
     pub fn new(masses: &[f64], lengths: &[f64], g: f64) -> Self {
         assert_eq!(masses.len(), lengths.len(), "mass/length count mismatch");
@@ -75,23 +160,17 @@ impl PlanarChain {
         // E = Ry(q) = [[c, 0, s], [0, 1, 0], [-s, 0, c]]
         let e = vec![
             cq,
-
             AD::constant(0.0),
             ctx.neg(sq),
             AD::constant(0.0),
             AD::constant(1.0),
             AD::constant(0.0),
             sq,
-
             AD::constant(0.0),
             cq,
         ];
         // r = Ry(q)ᵀ·(−l_{i-1}, 0, 0) = (−l·c, 0, −l·s)
-        let l = if i == 0 {
-            0.0
-        } else {
-            lengths[i - 1]
-        };
+        let l = if i == 0 { 0.0 } else { lengths[i - 1] };
         let lc = ctx.mul(AD::constant(-l), cq);
         let ls = ctx.mul(AD::constant(-l), sq);
         let mut x = e;
@@ -184,7 +263,6 @@ pub fn rnea_torques(
             AD::constant(0.0),
             AD::constant(0.0),
             masses[i],
-
             AD::constant(chain.lengths[i]),
             AD::constant(0.0),
             AD::constant(0.0),
@@ -230,7 +308,6 @@ pub fn rnea_torques(
                 f
             }
             None => forces[i].clone(),
-
         };
         tau[i] = f_i[1];
         if i > 0 {
@@ -245,10 +322,8 @@ pub fn rnea_torques(
             // r_f = child origin in parent = (l, 0, 0)
             let et = vec![
                 cq,
-
                 AD::constant(0.0),
                 sq,
-
                 AD::constant(0.0),
                 AD::constant(1.0),
                 AD::constant(0.0),

@@ -1,8 +1,9 @@
 # HANDOFF — 项目状态与新 Session 接入指南
 
-> 写于 2026-10-07。**v0.7.0**：接触 LCP 完整演示落地（第 44 条）。
-> 最后全量验证：**51 套件全绿**、clippy 零警告、wasm32 编译通过。
-> 44 条实现教训全部回写 design.md。
+> 写于 2026-10-07。**v0.7.1**：§9 路线三项落地（barrier 接触算子族 + 可插拔
+> 积分器 RK4 + URDF-lite 数据驱动链，第 45–47 条）。
+> 最后全量验证：**54 套件全绿**、clippy 零警告、wasm32 编译通过。
+> 47 条实现教训全部回写 design.md。
 
 ## 1. 项目概要
 
@@ -50,6 +51,7 @@ ad-demo    Yew + trunk wasm32 web demo（三面板：标量/单摆checkpoint/IFT
 | （本次 7） | f32 体系收尾（第 40 条）：接触算子泛型化 + 验证器泛型化（validate_custom_op<S>，f32 直接 FD 验证）；文档 v0.4.1 |
 | （本次 9） | 铰接体 RNEA 组合 + iLQR n=3 甩摆 + 系统辨识（m₂/d 反推）；solve_sym/SpatialForceCross 新算子；文档 v0.6.0 |
 | （本次 10） | 接触 LCP 完整演示（Moreau + 活动集枚举 + solve_sym 上 tape；弹跳物理/梯度/回弹辨识 e* = 0.75→ê + 2D 角块双接触）；文档 v0.7.0 |
+| （本次 11） | §9 路线三项（v0.7.1）：BarrierContactOp（IPC log-barrier，三路线梯度质量对比：barrier FD 偏差随 h 二阶收敛 vs LCP 切换 kink）+ 可插拔积分器 RK4（单步截断 6.7×10⁵× 优于 Euler；n=3 能量测试勘误 + 独立拉格朗日 oracle）+ URDF-lite 链描述（逐位一致）；文档 v0.7.1 |
 | （本次 8） | 项目收尾（第 41–42 条）：空间代数 f32 全量泛型化 + tape 瘦身/算子注册表（字节 −30~44%）；v0.5.0 |
 | （本次） | 工具链与场景补全（§12.3 第 28 条）：条件数探针、matvec、**Custom 记录槽位路由潜伏 bug 修复**、记录瘦身（单摆 −59%/−63% 累计）、iLQR LU 多右端、10⁴ 步链场景、§5.4 验收 bench；文档 v0.3.5 |
 
@@ -101,7 +103,7 @@ context 路由必须按 `tracked` 的 slot 取 `gins[slot]`。早期实现用 zi
 λM 被错路由给 λv。**FD 隔离器应包含部分追踪形态用例**（部分输入常量、
 且常量不在尾部）。
 
-## 5. 测试体系总览（43 套件）
+## 5. 测试体系总览（54 套件）
 
 | 层级 | 位置 | 方法 |
 |------|------|------|
@@ -109,6 +111,9 @@ context 路由必须按 `tracked` 的 slot 取 `gins[slot]`。早期实现用 zi
 | Cross-check | ad-core/tests/fuzz.rs | proptest 随机 DAG（反向 vs 双数，512 组） |
 | 场景 | ad/tests/scenarios.rs | 自由落体(解析解)/弹跳接触/12体链(26维) |
 | 物理 | ad-physics/tests/ | FD隔离器/动能守恒/角动量/网球拍/接触锥 |
+| 接触三路线 | ad-physics/tests/barrier_fd.rs + ad/tests/barrier_contact.rs | barrier FD隔离器/验证器f64+f32/C²探针/刚度扫描；barrier vs LCP 梯度质量/柔度形态/κ辨识 |
+| 积分器 | ad-physics/tests/integrate.rs | 谐振子收敛阶（Euler 2×/RK4 16×）/能量漂移 |
+| 铰接体 oracle | ad-physics/tests/articulated.rs | n=2闭式/n=3独立拉格朗日oracle/能量守恒（已勘误）/URDF-lite逐位一致 |
 | 检查点 | ad-checkpoint/tests/ | 分段vs全tape(4策略)/嵌套反转/重跑bit-exact |
 | 优化 | ad-optim/tests/e2e.rs | GD/iLQR 摆杆+接触球收敛基准 |
 | 长稳 | ad-core/tests/leak_*.rs | 全局分配器计数，50k 轮无泄漏 |
@@ -194,17 +199,12 @@ f32 标定（`f32.rs` + §5.1 表）、rayon 批量示例（`batch_rollout.rs`�
 `gh auth refresh -h github.com -s workflow` → 浏览器授权 →
 `git mv .github/ci.yml.pending .github/workflows/ci.yml && git commit && git push`
 ### 6.6 推送状态
-⏳ **待推送**：`bb64271`（接触 LCP 完整演示，v0.7.0）因 GitHub 连接中断
-（2026-10-07）滞留本地——恢复后 `git push`。此前至 `c5e642a` 均已推送。
-工作区干净。
-
-## 7. 常用命令
-`git push`（本地领先远端 3 提交）。此前提交（至 `8e12fce`）均已推送。工作区干净。
+（提交后由本次收尾更新——见提交记录）
 
 ## 7. 常用命令
 
 ```bash
-cargo test --workspace          # 43 套件全绿
+cargo test --workspace          # 54 套件全绿
 cargo bench -p ad               # criterion 基准
 cargo clippy --workspace --all-targets  # 零警告
 cargo check --workspace --target wasm32-unknown-unknown
@@ -217,21 +217,25 @@ git push                        # 推送
 
 | 文件 | 内容 |
 |------|------|
-| `docs/design.md` | 设计文档 v0.3.8 + §12 实现回写（12.3 有 37 条教训） |
+| `docs/design.md` | 设计文档 v0.3.8 + §12 实现回写（12.3 有 47 条教训）+ §12.6 Fysics 边界 |
 | `docs/design.md` §4.3.1 | CustomOp backward 契约（内部边 + 单步 FD 规范） |
-| `docs/design.md` §12.3 | 实现期偏差与教训（37 条，含全部 bug 复盘） |
+| `docs/design.md` §12.3 | 实现期偏差与教训（47 条，含全部 bug 复盘；45–47 = §9 三项） |
 | `crates/ad-core/src/context.rs` | Context 核心（backward_seeds/Jacobian/clip_grad） |
 | `crates/ad-physics/src/ops.rs` | 6 个空间代数 CustomOp |
-| `crates/ad-physics/src/contact.rs` | 接触力 CustomOp |
+| `crates/ad-physics/src/contact.rs` | 接触力 CustomOp（Hunt-Crossley/摩擦/**BarrierContactOp**） |
+| `crates/ad-physics/src/integrate.rs` | 可插拔积分器（SemiImplicitEuler/RK4，`Integrator` trait） |
 | `crates/ad-physics/src/chain.rs` | 手写 CustomOp 双关节摆（M⁻¹ 分解 VJP） |
+| `crates/ad-physics/src/articulated.rs` | RNEA 组合 + **ChainDesc（URDF-lite 构建器）** |
+| `crates/ad/tests/barrier_contact.rs` | barrier vs LCP 梯度质量对比 + κ 辨识 |
 | `crates/ad/examples/profile.rs` | 性能剖析用例（分配画像 + `--loop` 采样模式） |
 | `crates/ad-physics/tests/ops_fd.rs` | FD 隔离器参考实现（新算子照此写） |
 | `crates/ad-optim/src/ilqr.rs` | iLQR 求解器 |
 | `crates/ad-optim/tests/e2e.rs` | 端到端收敛基准（GD + 接触 iLQR） |
 | `crates/ad-optim/tests/chain.rs` | 双关节摆直通动力学 + 能量守恒 + iLQR + 手写算子对拍 |
+| `crates/ad-optim/tests/articulated.rs` | 铰接体 iLQR（积分器可插拔对照）+ 系统辨识 + 描述驱动重跑 |
 | `crates/ad-checkpoint/src/manager.rs` | 嵌套反转实现（reverse_window 递归） |
 
-## 9. 下一阶段路线（v0.7.1+：Fysics 对标分析-derived，2026-10-07 分析完成、未实现）
+## 9. 下一阶段路线（v0.7.1+：Fysics 对标分析-derived，2026-10-07 分析完成）
 
 来源：用户提供了对标"Fysics"（国产 GPU 原生可微物理引擎，MoziSim）的分析段落，
 要求分析其对 `ad` 的启发。逐条映射结论（已确认、可直接开工）：
@@ -241,38 +245,51 @@ git push                        # 推送
 FEM/柔体（本构模型依赖稀疏求解，solve_sym 稠密 O(n³) 不够）、流体、
 资产管线本体（USD/MJCF/URDF 解析器）。
 
-### 9.1 Barrier 接触算子族（IPC 思路，优先级最高）
+### 9.1 ~~Barrier 接触算子族（IPC 思路，优先级最高）~~ ✅ 已完成（2026-10-07，第 45 条）
 对标分析点名的 IPC（Incremental Potential Contact）路线：log-barrier 阻塞
-接触力 `f = -κ·log(f_gap)` for f_gap > 0，**C² 光滑、梯度处处存在、无活动集
-切换**——与现有两条接触路线互补：
+接触力，**C² 光滑、梯度处处存在、无活动集切换**——与现有两条接触路线互补：
 - Hunt-Crossley 平滑力（ContactNormalOp，连续但需调刚度）
 - Moreau LCP + 活动集（lcp_contact.rs，精确但切换半光滑）
 - **barrier（新增）**：对梯度质量敏感的优化（iLQR/系统辨识）可能最稳
-实现要点：新算子族 `BarrierContactOp`（1D 先行，2D 角块复用）；基建全部
-现成（泛型算子 + 验证器 f64/f32 + FD 隔离器 + 刚度扫描模式）。
-验收：验证器 f64+f32 全过；刚度 κ 扫描对照（§4.2.4 模式）；与 LCP 路线的
-轨迹 + 梯度质量对比（写入 design.md 第 45 条）。
+实现：`BarrierContactOp`（`f = κ·â/g̃`，全 softplus_ε 复合，泛型 f64/f32 手写
+VJP；1D 先行，2D 角块同算子复用）。
+验收全过：验证器 f64+f32；FD 隔离器；物理先验 + **C² 探针（带 clamp 对照组）**；
+刚度扫描 κ∈{5,50,500}（FD ≤1.7e-9）；**与 LCP 路线的梯度质量对比**：
+barrier worst 1.38e-3/1.39e-5（h=1e-3/1e-4，随 h 二阶收敛）vs LCP 2.38e-1/
+5.92e-1（切换 kink 支配、不随 h 消失）——design.md 第 45 条(d)。
+实现期教训：**κ–ε–dt 参数域耦合**（softplus 尾部力标尺 κε²/4 ≪ mg·d̂ 且
+ω·Δt < 2，首跑 ε=0.02/κ=500 弹飞实证入第 45 条(c)）。
+附：κ 系统辨识 ê=198.8（真值 200）。
 
-### 9.2 积分器族（可插拔）
+### 9.2 ~~积分器族（可插拔）~~ ✅ 已完成（2026-10-07，第 46 条）
 现状：半隐式 Euler 散落各演示（未成体系）。目标：积分器为可插拔策略——
-- **RK4 先行**：tape 上就是四段表达式组合，成本低；iLQR 精度立涨
-- 半隐式 Euler 保留（LCP/Moreau 组合依赖其结构）
+- **RK4 先行**：tape 上就是四段表达式组合，成本低；iLQR 精度立涨 ✅
+  `ad-physics::integrate`（`Integrator` trait，二阶系统接口）；
+- 半隐式 Euler 保留（LCP/Moreau 组合依赖其结构）✅
 - 变分/辛积分器：远期（能量行为最好，与能量守恒先验测试互补）
-验收：RK4 vs 半隐式 Euler 在铰接体 iLQR 收敛精度上的对照基准
-（articulated.rs 测试扩一个 integrator 参数）。
+验收 ✅：铰接体 n=3 对照——单步局部截断 Euler 2.2e-3 vs RK4 3.3e-9
+（6.7×10⁵×）；能量漂移（4s）7.3e-3 vs 1.4e-10；iLQR 双收敛
+（~105 → 34.65/34.63，7 迭代）。
+**附带收获（重要）**：能量漂移腿暴露 n=3 能量测试的两处抵消 bug（速度冻结 +
+关节速率未累积成绝对角速率）——修正并新增独立拉格朗日 oracle
+（`composed_matches_lagrangian_oracle_n3`，M 对拍 1e-8），n=3 动力学首次
+拿到真物理 oracle。RK4 首版 k4 求值点错误静默降为三阶、收敛阶测试当场抓住。
 
-### 9.3 数据驱动铰接体（URDF-lite，通向场景格式）
+### 9.3 ~~数据驱动铰接体（URDF-lite，通向场景格式）~~ ✅ 已完成（2026-10-07，第 47 条）
 现状：PlanarChain 硬编码（masses/lengths/g 字段，平面点质量模型）。
 目标：结构化描述（每关节 {质量, 长度, 轴向, 阻尼} 列表 → 链构建器），
 即 **URDF/MJCF 导入在 AD 侧的对应物**——场景格式定义多体模型，ad 提供
 可微动力学。积木全在（articulated.rs：RNEA 组合 + masses AD 槽位）。
-验收：n=3 描述构建 vs 现有硬编码逐位一致；描述驱动的 iLQR 重跑。
+实现：`ChainDesc { joints: Vec<JointDesc { mass, length, damping, axis }>, g }`
+→ `to_chain()`（axis 字段前向兼容 3D 化）。
+验收 ✅：n=3 描述构建 vs 硬编码**逐位一致**（槽位/RNEA 力矩/150 步 rollout
+的 to_bits）；描述驱动 iLQR 重跑逐位一致（loss bits + 迭代数）。
 
-### 9.4 批量并行 scaling 叙事（文档级）
+### 9.4 ~~批量并行 scaling 叙事（文档级）~~ ✅ 已完成（design.md §12.6）
 "4000 只机器人并行"的 ad 侧对应物已实证：batch_rollout 示例（576 任务 ×
-1000 步 7.4 ms，N 独立 Context 跨线程 + 梯度聚合）。补一个基准章节写入
-design.md，明确"CPU 多核批量可行、GPU 属引擎层"的边界。
+1000 步 7.4 ms，N 独立 Context 跨线程 + 梯度聚合）。基准章节已写入
+design.md §12.6，明确"CPU 多核批量可行、GPU 属引擎层"的边界。
 
-### 9.5 design.md 新增一节
+### 9.5 ~~design.md 新增一节~~ ✅ 已完成（design.md §12.6）
 "与 Fysics 类引擎的边界"：多物理场/资产管线/GPU 属引擎层，ad 是其
 可微底座；引用对标分析的商业化结论（开源核心 + 垂直切入 = 机器人可微仿真）。
