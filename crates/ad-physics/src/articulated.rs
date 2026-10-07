@@ -64,7 +64,7 @@ impl PlanarChain {
     /// 测试共同守护。
     /// （实现期教训：曾把 r 误取"子原点在父系"(l,0,0)，M 的耦合列
     /// 全错——n=2 闭式对拍 + M/bias 分层探针一次定位。）
-    pub fn joint_transform(
+    fn joint_transform(
         ctx: &mut Context<f64>,
         q: &[AD<f64>],
         lengths: &[f64],
@@ -212,7 +212,6 @@ pub fn rnea_torques(
         v = vi;
         a = ai;
     }
-    let _ = (v, a);
 
     // ---- 回传：τ_i = f_i[1]（S = e_ωy）；物理形式力回传 ----
     //   f_p_lin = Eᵀ·f_c_lin；n_p = Eᵀ·(n_c + r_mc × f_c_lin)

@@ -84,7 +84,7 @@ fn step_ball(
         let br = ctx.add(b[0], rs[0]);
         let rhs = ctx.neg(br);
         let mat = vec![a11];
-        let lam = solve_sym_on_tape(ctx, &mat, &[rhs]);
+        let lam = ad_ops::solve_sym_with(ctx, &mat, &[rhs]);
         if lam[0].value >= 0.0 {
             let wl1 = ctx.add(b[1], rs[1]);
             let wl2 = ctx.mul(AD::constant(-m_inv), lam[0]);
@@ -104,7 +104,7 @@ fn step_ball(
         let br = ctx.add(b[1], rs[1]);
         let rhs = ctx.neg(br);
         let mat = vec![a11];
-        let lam = solve_sym_on_tape(ctx, &mat, &[rhs]);
+        let lam = ad_ops::solve_sym_with(ctx, &mat, &[rhs]);
         if lam[0].value >= 0.0 {
             let wl1 = ctx.add(b[0], rs[0]);
             let wl2 = ctx.mul(AD::constant(-m_inv), lam[0]);
@@ -126,18 +126,12 @@ fn step_ball(
     (x_new, v_free)
 }
 
-/// solve_sym 在 tape 上的 1×1 包装（λ 被追踪 → 梯度自动反传）
-fn solve_sym_on_tape(ctx: &mut Context<f64>, m: &[AD<f64>], b: &[AD<f64>]) -> Vec<AD<f64>> {
-    ad_ops::solve_sym_with(ctx, m, b)
-}
-
-/// rollout：返回逐步 (x, v)；e 为 AD 叶子（梯度路径）
-fn rollout_ball(e_val: f64, steps: usize, x0: f64, box_len: f64) -> (Vec<f64>, Vec<f64>, f64) {
+/// rollout：返回逐步 (x, v) 轨迹
+fn rollout_ball(e_val: f64, steps: usize, x0: f64, box_len: f64) -> (Vec<f64>, Vec<f64>) {
     let mut ctx = Context::<f64>::new();
-    let (e, ve) = ctx.var(e_val);
-    let (mut x, vx) = ctx.var(x0);
-    let (mut v, vv) = ctx.var(0.0);
-    let _ = (vx, vv);
+    let e = ctx.var(e_val).0;
+    let (mut x, _) = ctx.var(x0);
+    let (mut v, _) = ctx.var(0.0);
     let mut xs = Vec::with_capacity(steps);
     let mut vs = Vec::with_capacity(steps);
     for _ in 0..steps {
@@ -147,10 +141,7 @@ fn rollout_ball(e_val: f64, steps: usize, x0: f64, box_len: f64) -> (Vec<f64>, V
         x = xn;
         v = vn;
     }
-    // 梯度（对 e）——最后一次 backward（J = Σx·dt 形式由调用方自行 backward；
-    // 此处 rollout 只返回轨迹，梯度路径由带 e 叶子的完整 tape 承载）
-    let _ = ve;
-    (xs, vs, e_val)
+    (xs, vs)
 }
 
 /// 带梯度的 rollout：J(e) = Σ x_t·dt，返回 (J, dJ/de)
@@ -173,15 +164,14 @@ fn rollout_with_grad(e_val: f64, steps: usize, x0: f64, box_len: f64) -> (f64, f
 
 #[test]
 fn lcp_bounce_physics() {
-    let (m, l, g) = (1.0f64, 2.0f64, G);
-    let _ = (m, l);
+    let g = G;
     let e = 0.75f64;
     let x0 = 1.5f64;
     let dt = DT;
     // 解析：掉落时间 t1 = √(2·x0/g)；第一反弹 apex = e²·x0
     let t1 = (2.0 * x0 / g).sqrt();
     let steps_to_first_impact = (t1 / dt) as usize;
-    let (xs, vs, _) = rollout_ball(e, 2000, x0, l);
+    let (xs, vs) = rollout_ball(e, 2000, x0, 2.0);
 
     // 1. 掉落段自由飞行（x = x0 − ½g t²）
     let t_check = 0.3f64;
@@ -240,21 +230,9 @@ fn lcp_gradient_through_switches() {
 #[test]
 fn lcp_sysid_restitution() {
     // 观测：真值 e* = 0.75 的轨迹
-    let (xs_obs, _, _) = rollout_ball(0.75, 300, 1.5, 2.0);
+    let (xs_obs, _) = rollout_ball(0.75, 300, 1.5, 2.0);
 
-    // loss(e) = ½·mean((x_t(e) − x_obs)²)
-    fn loss_at(e_val: f64, xs_obs: &[f64]) -> f64 {
-        let (xs, _, _) = rollout_ball(e_val, xs_obs.len(), 1.5, 2.0);
-        let n = xs.len() as f64;
-        0.5 * xs
-            .iter()
-            .zip(xs_obs)
-            .map(|(a, b)| (a - b) * (a - b))
-            .sum::<f64>()
-            / n
-    }
-    // 梯度：AD（叶子 e 的一次带梯度 rollout ≈ loss × N/dt 缩放——
-    // 直接用数值版包装进 GD：loss_and_grad 组合 rollout_with_grad 的 J 与 dJ
+    // loss(e) = ½·mean((x_t(e) − x_obs)²)；梯度经 e 叶子自动反传
     fn loss_and_grad(e_val: f64, xs_obs: &[f64], out: &mut [f64]) -> f64 {
         let mut ctx = Context::<f64>::new();
         let (e, ve) = ctx.var(e_val);
@@ -282,7 +260,6 @@ fn lcp_sysid_restitution() {
         tol_rel_improve: 1e-14,
         ..Default::default()
     };
-    let g = [0.0f64; 1];
     let (e_hat, rep) = minimize_gradient_descent(&[0.5], &cfg, |p, out| {
         loss_and_grad(p[0], &xs_obs, out)
     });
@@ -291,7 +268,6 @@ fn lcp_sysid_restitution() {
         rep.loss0, rep.loss, e_hat[0], rep.iters
     );
     assert!((e_hat[0] - 0.75).abs() < 5e-3, "ê = {}", e_hat[0]);
-    let _ = (loss_at, g);
 }
 
 // ============================================================ 2. 2D 角块（双接触同时主动）
@@ -392,22 +368,14 @@ fn lcp_corner_block_squeeze() {
     let mut ys = Vec::new();
     for _ in 0..400 {
         let mut ctx = Context::<f64>::new();
-
         let s_ad: Vec<AD<f64>> = st.iter().map(|&v| ctx.var(v).0).collect();
-        let (x, y, vx, vy) = (&s_ad[0], &s_ad[1], &s_ad[2], &s_ad[3]);
-        let _ = (x, y);
-        // 手动内联 step_block（需要 ctx 与值混合读）：直接调用
         let e_ad = AD::constant(e);
         let out = step_block(&mut ctx, &s_ad, &e_ad);
-        st = [
-            out[0].value,
-            out[1].value,
-            out[2].value,
-            out[3].value,
-        ];
+        for (i, o) in out.iter().enumerate() {
+            st[i] = o.value;
+        }
         xs.push(st[0]);
         ys.push(st[1]);
-        let _ = (vx, vy);
     }
     eprintln!("角块收位：x = {:.5}, y = {:.5}", st[0], st[1]);
     assert!(st[0].abs() < 0.02, "未收入左墙：x = {}", st[0]);

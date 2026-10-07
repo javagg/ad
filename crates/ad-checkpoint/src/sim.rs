@@ -5,7 +5,7 @@
 //! 前向残差保存 [sin θ, cos θ, ω, dt, g, L]，反向手工推导（f_fwd 风格）。
 
 use crate::manager::Recomputable;
-use ad_core::{Context, CustomOp, Variable, AD};
+use ad_core::{Context, CustomOp, AD};
 use smallvec::{smallvec, SmallVec};
 
 /// 单摆单步算子：inputs = [θ, ω, g, L, dt]，outputs = [θ', ω']。
@@ -129,7 +129,3 @@ impl Recomputable for PendulumSim {
         self.state_ad = outs;
     }
 }
-
-/// g / L 的叶子句柄（梯度读取用）由调用方保留；此类型仅为示例完整性。
-#[allow(dead_code)]
-pub type PendulumParams = (Variable, Variable);

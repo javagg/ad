@@ -42,7 +42,6 @@ fn bench_scalar_expr_reuse(c: &mut Criterion) {
             g
         })
     });
-    let _ = (a, va, vb, vc);
 }
 
 /// 1000 步单摆：no_grad 前向 + 快照 + 分段反向（含逐段重算）

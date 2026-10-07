@@ -470,39 +470,3 @@ fn fuzz_custom_random_graphs_match_dual_oracle() {
     assert_eq!(total_mismatch, 0, "{total_mismatch} 个 (seed, leaf) 不一致");
 }
 
-#[test]
-fn debug_len_mismatch() {
-    for seed in 1..=512u64 {
-        let (leaves, steps, weights) = plan_case(seed);
-        let _ = weights;
-        // 执行器长度模拟
-        let mut len = 4usize;
-        for (si, step) in steps.iter().enumerate() {
-            match *step {
-                Step::Prim { op: _, i, j } => {
-                    assert!(i < len && j < len, "seed {seed} step {si}: prim idx ({i},{j}) len {len}");
-                    len += 1;
-                }
-                Step::Scale { i, c: _ } => {
-                    assert!(i < len, "seed {seed} step {si}: scale idx {i} len {len}");
-                    len += 1;
-                }
-                Step::SqMix { i, j, ca: _, cb: _, va: _, vb: _ } => {
-                    assert!(i < len && j < len, "seed {seed} step {si}: sqmix idx ({i},{j}) len {len}");
-                    len += 2;
-                }
-                Step::Tri { i, j, k, ca: _, cb: _, cc: _, va: _, vb: _, vc: _ } => {
-                    assert!(i < len && j < len && k < len, "seed {seed} step {si}: tri len {len}");
-                    len += 2;
-                }
-                Step::Dot3 { idx, cs: _, vs: _ } => {
-                    for &i in idx.iter() {
-                        assert!(i < len, "seed {seed} step {si}: dot3 idx {i} len {len}");
-                    }
-                    len += 1;
-                }
-            }
-        }
-        let _ = &leaves;
-    }
-}
