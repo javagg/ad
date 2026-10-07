@@ -16,10 +16,10 @@
 
 ```
 ad-core    AD<S>标量（f64/f32）、Context、Tape（u32 节点 + 算子注册表）、CustomOp trait、线程局部挂载、双数oracle、no_grad/detach/异常检测
-ad-ops     基础算子全表（含 sin/cos/tanh/atan2/clamp/lerp 等）+ bulk 向量（dot/axpy/norm2）
+ad-ops     基础算子全表（含 sin/cos/tanh/atan2/clamp/lerp 等）+ bulk 向量（dot/axpy/norm2/matvec）+ solve_sym（对称线性求解）
 ad-custom  IFT 隐式求解模式（ImplicitSolve）、稠密线性求解
 ad-checkpoint  Recomputable 状态机、快照调度（Uniform/Nested/Online/Custom）、分段反向+边界伴随、PendulumSim
-ad-physics 空间代数算子（泛型 f64/f32：spatial.rs 辅助 + ops.rs 6 CustomOp + contact.rs 接触力 + chain.rs 双摆 + gyro.rs 陀螺）
+ad-physics 空间代数算子（泛型 f64/f32：spatial.rs 辅助 + ops.rs 7 CustomOp + contact.rs 接触力 + chain.rs 双摆 + gyro.rs 陀螺 + articulated.rs 铰接体 RNEA 组合）
 ad-verify  FD/随机方向/Taylor余项/健康度/轨迹稳定性/可微性检查
 ad-optim   Armijo GD + Tassa正则化iLQR（Dynamics trait + AD逐列Jacobian）
 ad         facade：re-exports 全部 + prelude
@@ -230,3 +230,49 @@ git push                        # 推送
 | `crates/ad-optim/tests/e2e.rs` | 端到端收敛基准（GD + 接触 iLQR） |
 | `crates/ad-optim/tests/chain.rs` | 双关节摆直通动力学 + 能量守恒 + iLQR + 手写算子对拍 |
 | `crates/ad-checkpoint/src/manager.rs` | 嵌套反转实现（reverse_window 递归） |
+
+## 9. 下一阶段路线（v0.7.1+：Fysics 对标分析-derived，2026-10-07 分析完成、未实现）
+
+来源：用户提供了对标"Fysics"（国产 GPU 原生可微物理引擎，MoziSim）的分析段落，
+要求分析其对 `ad` 的启发。逐条映射结论（已确认、可直接开工）：
+
+**已打穿**：接触不连续性（平滑接触力 + LCP/活动集两条路线并存）；
+**边界外**（§1.3 重申，引擎层非 ad 范围）：GPU 后端（沐曦等国产适配）、
+FEM/柔体（本构模型依赖稀疏求解，solve_sym 稠密 O(n³) 不够）、流体、
+资产管线本体（USD/MJCF/URDF 解析器）。
+
+### 9.1 Barrier 接触算子族（IPC 思路，优先级最高）
+对标分析点名的 IPC（Incremental Potential Contact）路线：log-barrier 阻塞
+接触力 `f = -κ·log(f_gap)` for f_gap > 0，**C² 光滑、梯度处处存在、无活动集
+切换**——与现有两条接触路线互补：
+- Hunt-Crossley 平滑力（ContactNormalOp，连续但需调刚度）
+- Moreau LCP + 活动集（lcp_contact.rs，精确但切换半光滑）
+- **barrier（新增）**：对梯度质量敏感的优化（iLQR/系统辨识）可能最稳
+实现要点：新算子族 `BarrierContactOp`（1D 先行，2D 角块复用）；基建全部
+现成（泛型算子 + 验证器 f64/f32 + FD 隔离器 + 刚度扫描模式）。
+验收：验证器 f64+f32 全过；刚度 κ 扫描对照（§4.2.4 模式）；与 LCP 路线的
+轨迹 + 梯度质量对比（写入 design.md 第 45 条）。
+
+### 9.2 积分器族（可插拔）
+现状：半隐式 Euler 散落各演示（未成体系）。目标：积分器为可插拔策略——
+- **RK4 先行**：tape 上就是四段表达式组合，成本低；iLQR 精度立涨
+- 半隐式 Euler 保留（LCP/Moreau 组合依赖其结构）
+- 变分/辛积分器：远期（能量行为最好，与能量守恒先验测试互补）
+验收：RK4 vs 半隐式 Euler 在铰接体 iLQR 收敛精度上的对照基准
+（articulated.rs 测试扩一个 integrator 参数）。
+
+### 9.3 数据驱动铰接体（URDF-lite，通向场景格式）
+现状：PlanarChain 硬编码（masses/lengths/g 字段，平面点质量模型）。
+目标：结构化描述（每关节 {质量, 长度, 轴向, 阻尼} 列表 → 链构建器），
+即 **URDF/MJCF 导入在 AD 侧的对应物**——场景格式定义多体模型，ad 提供
+可微动力学。积木全在（articulated.rs：RNEA 组合 + masses AD 槽位）。
+验收：n=3 描述构建 vs 现有硬编码逐位一致；描述驱动的 iLQR 重跑。
+
+### 9.4 批量并行 scaling 叙事（文档级）
+"4000 只机器人并行"的 ad 侧对应物已实证：batch_rollout 示例（576 任务 ×
+1000 步 7.4 ms，N 独立 Context 跨线程 + 梯度聚合）。补一个基准章节写入
+design.md，明确"CPU 多核批量可行、GPU 属引擎层"的边界。
+
+### 9.5 design.md 新增一节
+"与 Fysics 类引擎的边界"：多物理场/资产管线/GPU 属引擎层，ad 是其
+可微底座；引用对标分析的商业化结论（开源核心 + 垂直切入 = 机器人可微仿真）。
